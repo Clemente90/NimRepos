@@ -1,7 +1,7 @@
 # Nifasm - x86_64 Binary Assembler
 # A dependency-free x86_64 assembler that emits binary instruction bytes
 
-import std/strutils
+import std/[strutils, tables]
 import elf
 
 type
@@ -33,24 +33,23 @@ type
     id*: LabelId
     position*: int  # Position where label is defined
 
-  # Jump instruction entry for optimization
-  JumpEntry* = object
-    position*: int        # Position in buffer where jump instruction starts
+  # Relocation entry for optimization and patching
+  RelocEntry* = object
+    position*: int        # Position in buffer where instruction starts
     target*: LabelId      # Target label ID
-    instruction*: JumpType # Type of jump instruction
+    kind*: RelocKind      # Type of relocation/instruction
     originalSize*: int    # Original instruction size in bytes
 
-  # Types of jump instructions
-  JumpType* = enum
-    jtCall, jtJmp, jtJe, jtJne, jtJg, jtJl, jtJge, jtJle, jtJa, jtJb, jtJae, jtJbe
-
+  # Types of instructions requiring relocation/patching
+  RelocKind* = enum
+    rkCall, rkJmp, rkJe, rkJne, rkJg, rkJl, rkJge, rkJle, rkJa, rkJb, rkJae, rkJbe, rkLea
 
   # Buffer for accumulating instruction bytes
   Buffer* = object
     data*: seq[byte]
-    jumps*: seq[JumpEntry]  # Track jump instructions for optimization
-    labels*: seq[LabelDef]  # Track label definitions
-    nextLabelId*: int       # Next available label ID
+    relocs*: seq[RelocEntry]  # Track instructions needing relocation
+    labels*: seq[LabelDef]    # Track label definitions
+    nextLabelId*: int         # Next available label ID
 
 # LabelId equality comparison
 proc `==`*(a, b: LabelId): bool =
@@ -60,7 +59,7 @@ proc `==`*(a, b: LabelId): bool =
 proc initBuffer*(): Buffer =
   result = Buffer(
     data: @[],
-    jumps: @[],
+    relocs: @[],
     labels: @[],
     nextLabelId: 0
   )
@@ -118,13 +117,13 @@ proc getLabelPosition*(buf: Buffer; label: LabelId): int =
       return labelDef.position
   raise newException(ValueError, "Label not found")
 
-# Jump optimization helper functions
-proc addJump*(buf: var Buffer; position: int; target: LabelId; instruction: JumpType; size: int) =
-  ## Add a jump entry to the buffer for later optimization
-  buf.jumps.add(JumpEntry(
+# Relocation helper functions
+proc addReloc*(buf: var Buffer; position: int; target: LabelId; kind: RelocKind; size: int) =
+  ## Add a relocation entry to the buffer
+  buf.relocs.add(RelocEntry(
     position: position,
     target: target,
-    instruction: instruction,
+    kind: kind,
     originalSize: size
   ))
 
@@ -132,12 +131,14 @@ proc getCurrentPosition*(buf: Buffer): int =
   ## Get the current position in the buffer
   buf.data.len
 
-proc calculateJumpDistance*(fromPos: int; toPos: int; instruction: JumpType = jtJmp): int =
-  ## Calculate the distance for a relative jump
+proc calculateRelocDistance*(fromPos: int; toPos: int; kind: RelocKind = rkJmp): int =
+  ## Calculate the distance for a relative instruction
   ## For x86-64, the distance is calculated from after the entire instruction
-  ## CALL/JMP: 1 byte opcode + 4 bytes displacement = 5 bytes total
-  ## Conditional jumps: 2 bytes opcode + 4 bytes displacement = 6 bytes total
-  let instructionSize = if instruction in {jtCall, jtJmp}: 5 else: 6
+  let instructionSize = 
+    case kind
+    of rkCall, rkJmp: 5
+    of rkLea: 7
+    else: 6
   toPos - (fromPos + instructionSize)  # Distance from after the complete instruction
 
 proc canUseShortJump*(distance: int): bool =
@@ -1266,15 +1267,15 @@ proc emitCall*(dest: var Buffer; target: LabelId) =
   ## Emit CALL instruction: CALL target (relative call)
   let pos = dest.getCurrentPosition()
   dest.add(0xE8)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtCall, 5)  # 1 byte opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkCall, 5)  # 1 byte opcode + 4 bytes displacement
 
 proc emitJmp*(dest: var Buffer; target: LabelId) =
   ## Emit JMP instruction: JMP target (relative jump)
   let pos = dest.getCurrentPosition()
   dest.add(0xE9)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJmp, 5)  # 1 byte opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJmp, 5)  # 1 byte opcode + 4 bytes displacement
 
 # Conditional jump instructions
 proc emitJe*(dest: var Buffer; target: LabelId) =
@@ -1282,80 +1283,80 @@ proc emitJe*(dest: var Buffer; target: LabelId) =
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x84)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJe, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJe, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJne*(dest: var Buffer; target: LabelId) =
   ## Emit JNE instruction: JNE target (jump if not equal)
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x85)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJne, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJne, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJg*(dest: var Buffer; target: LabelId) =
   ## Emit JG instruction: JG target (jump if greater)
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x8F)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJg, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJg, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJl*(dest: var Buffer; target: LabelId) =
   ## Emit JL instruction: JL target (jump if less)
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x8C)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJl, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJl, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJge*(dest: var Buffer; target: LabelId) =
   ## Emit JGE instruction: JGE target (jump if greater or equal)
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x8D)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJge, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJge, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJle*(dest: var Buffer; target: LabelId) =
   ## Emit JLE instruction: JLE target (jump if less or equal)
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x8E)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJle, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJle, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJa*(dest: var Buffer; target: LabelId) =
   ## Emit JA instruction: JA target (jump if above, unsigned)
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x87)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJa, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJa, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJb*(dest: var Buffer; target: LabelId) =
   ## Emit JB instruction: JB target (jump if below, unsigned)
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x82)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJb, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJb, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJae*(dest: var Buffer; target: LabelId) =
   ## Emit JAE instruction: JAE target (jump if above or equal, unsigned)
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x83)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJae, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJae, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJbe*(dest: var Buffer; target: LabelId) =
   ## Emit JBE instruction: JBE target (jump if below or equal, unsigned)
   let pos = dest.getCurrentPosition()
   dest.add(0x0F)
   dest.add(0x86)
-  dest.addt32(0)  # Placeholder, will be filled during optimization
-  dest.addJump(pos, target, jtJbe, 6)  # 2 bytes opcode + 4 bytes displacement
+  dest.addt32(0)  # Placeholder
+  dest.addReloc(pos, target, rkJbe, 6)  # 2 bytes opcode + 4 bytes displacement
 
 proc emitJmpReg*(dest: var Buffer; reg: Register) =
   ## Emit JMP instruction: JMP reg (indirect jump)
@@ -1458,34 +1459,49 @@ proc emitNop*(dest: var Buffer) =
   dest.add(0x90)
 
 # Jump optimization functions
-proc updateJumpDisplacements*(buf: var Buffer) =
-  ## Update all jump displacements based on current label positions
-  for jump in buf.jumps:
-    let currentPos = jump.position
-    let targetPos = buf.getLabelPosition(jump.target)
-    let distance = calculateJumpDistance(currentPos, targetPos, jump.instruction)
+proc updateRelocDisplacements*(buf: var Buffer) =
+  ## Update all relocation displacements based on current label positions
+  for reloc in buf.relocs:
+    let currentPos = reloc.position
+    let targetPos = buf.getLabelPosition(reloc.target)
+    let distance = calculateRelocDistance(currentPos, targetPos, reloc.kind)
 
     # Convert to signed 32-bit for proper encoding
     let signedDistance = int32(distance)
 
     # Check if we have enough space in the buffer
     let requiredSize = 
-      case jump.instruction
-      of jtCall, jtJmp: currentPos + 5
+      case reloc.kind
+      of rkCall, rkJmp: currentPos + 5
+      of rkLea: currentPos + 7
       else: currentPos + 6
 
     if requiredSize > buf.data.len:
-      continue  # Skip this jump if buffer is too small
+      continue  # Skip this relocation if buffer is too small
+    
+    if reloc.kind == rkLea:
+      # LEA instruction is 7 bytes: 48 8D 05 (ModRM=05) disp32
+      # distance is from end of instruction.
+      # RIP-relative: effective address = RIP + disp.
+      # RIP is address of next instruction.
+      # So distance calculation is correct (toPos - (currentPos + 7)).
+      discard
 
     # Update the displacement in the instruction
-    case jump.instruction
-    of jtCall:
+    case reloc.kind
+    of rkLea:
+      # LEA uses 32-bit displacement (little-endian) at offset 3
+      buf.data[currentPos + 3] = byte(signedDistance and 0xFF)
+      buf.data[currentPos + 4] = byte((signedDistance shr 8) and 0xFF)
+      buf.data[currentPos + 5] = byte((signedDistance shr 16) and 0xFF)
+      buf.data[currentPos + 6] = byte((signedDistance shr 24) and 0xFF)
+    of rkCall:
       # CALL uses 32-bit displacement (little-endian)
       buf.data[currentPos + 1] = byte(signedDistance and 0xFF)
       buf.data[currentPos + 2] = byte((signedDistance shr 8) and 0xFF)
       buf.data[currentPos + 3] = byte((signedDistance shr 16) and 0xFF)
       buf.data[currentPos + 4] = byte((signedDistance shr 24) and 0xFF)
-    of jtJmp:
+    of rkJmp:
       # JMP uses 32-bit displacement (little-endian)
       buf.data[currentPos + 1] = byte(signedDistance and 0xFF)
       buf.data[currentPos + 2] = byte((signedDistance shr 8) and 0xFF)
@@ -1506,10 +1522,10 @@ proc optimizeJumps*(buf: Buffer): Buffer =
   # Copy all data to new buffer
   optimized.data = buf.data
   optimized.labels = buf.labels
-  optimized.jumps = buf.jumps
+  optimized.relocs = buf.relocs
 
-  # Update all jump displacements in the new buffer
-  optimized.updateJumpDisplacements()
+  # Update all reloc displacements in the new buffer
+  optimized.updateRelocDisplacements()
 
   # Try to optimize jumps by creating a new buffer with shorter instructions
   var changed = true
@@ -1521,99 +1537,140 @@ proc optimizeJumps*(buf: Buffer): Buffer =
     inc(iterations)
 
     var newBuf = initBuffer()
-    var jumpIndex = 0
+    newBuf.labels = optimized.labels # Copy labels, will update positions
+    
+    # Map label positions to indices for efficient update
+    var posToLabels = initTable[int, seq[int]]()
+    for idx, lab in optimized.labels:
+      if not posToLabels.hasKey(lab.position):
+        posToLabels[lab.position] = @[]
+      posToLabels[lab.position].add(idx)
+
+    var relocIndex = 0
     var i = 0
+    var currentNewPos = 0
 
     while i < optimized.data.len:
-      # Check if we're at a jump instruction
-      if jumpIndex < optimized.jumps.len and optimized.jumps[jumpIndex].position == i:
-        let jump = optimized.jumps[jumpIndex]
-        let targetPos = optimized.getLabelPosition(jump.target)
-        let distance = calculateJumpDistance(i, targetPos, jump.instruction)
+      # Update labels at this position
+      if posToLabels.hasKey(i):
+        for labIdx in posToLabels[i]:
+          newBuf.labels[labIdx].position = currentNewPos
+      
+      # Check if we're at a reloc instruction
+      if relocIndex < optimized.relocs.len and optimized.relocs[relocIndex].position == i:
+        let reloc = optimized.relocs[relocIndex]
+        let targetPos = optimized.getLabelPosition(reloc.target)
+        let distance = calculateRelocDistance(i, targetPos, reloc.kind)
+
+        var addedBytes = 0
+        let originalSize = 
+            case reloc.kind
+            of rkLea: 7
+            of rkCall, rkJmp: 5
+            else: 6
 
         # Check if we can use a short jump
-        if canUseShortJump(distance):
-          case jump.instruction
-          of jtCall:
+        if reloc.kind == rkLea:
+           # LEA is fixed size, copy original bytes
+           # The ModRM byte is at +2.
+           newBuf.data.add(0x48)
+           newBuf.data.add(0x8D)
+           newBuf.data.add(optimized.data[i+2])
+           newBuf.addt32(int32(distance))
+           addedBytes = 7
+           
+           # Keep track of this relocation in the new buffer
+           newBuf.addReloc(currentNewPos, reloc.target, reloc.kind, reloc.originalSize)
+           
+        elif canUseShortJump(distance):
+          case reloc.kind
+          of rkCall:
             # CALL doesn't have 8-bit form, emit as 32-bit
             newBuf.data.add(0xE8)  # CALL opcode
             newBuf.addt32(int32(distance))
-          of jtJmp:
+            addedBytes = 5
+            newBuf.addReloc(currentNewPos, reloc.target, reloc.kind, reloc.originalSize)
+          of rkJmp:
             # JMP with 8-bit displacement
             newBuf.data.add(0xEB)  # JMP rel8 opcode
             newBuf.data.add(byte(distance and 0xFF))
+            addedBytes = 2
             changed = true
+            # No need to track reloc for short jump
           else:
             # Conditional jumps with 8-bit displacement
             let shortOpcode = 
-              case jump.instruction
-              of jtJe: 0x74
-              of jtJne: 0x75
-              of jtJg: 0x7F
-              of jtJl: 0x7C
-              of jtJge: 0x7D
-              of jtJle: 0x7E
-              of jtJa: 0x77
-              of jtJb: 0x72
-              of jtJae: 0x73
-              of jtJbe: 0x76
+              case reloc.kind
+              of rkJe: 0x74
+              of rkJne: 0x75
+              of rkJg: 0x7F
+              of rkJl: 0x7C
+              of rkJge: 0x7D
+              of rkJle: 0x7E
+              of rkJa: 0x77
+              of rkJb: 0x72
+              of rkJae: 0x73
+              of rkJbe: 0x76
               else: 0x74  # Default to JE
 
             newBuf.data.add(byte(shortOpcode))
             newBuf.data.add(byte(distance and 0xFF))
+            addedBytes = 2
             changed = true
         else:
           # Use 32-bit displacement
-          case jump.instruction
-          of jtCall:
+          case reloc.kind
+          of rkCall:
             newBuf.data.add(0xE8)  # CALL opcode
             newBuf.addt32(int32(distance))
-          of jtJmp:
+            addedBytes = 5
+            newBuf.addReloc(currentNewPos, reloc.target, reloc.kind, reloc.originalSize)
+          of rkJmp:
             newBuf.data.add(0xE9)  # JMP rel32 opcode
             newBuf.addt32(int32(distance))
+            addedBytes = 5
+            newBuf.addReloc(currentNewPos, reloc.target, reloc.kind, reloc.originalSize)
           else:
             # Conditional jumps with 32-bit displacement
             newBuf.data.add(0x0F)  # Two-byte opcode prefix
             let longOpcode = 
-              case jump.instruction
-              of jtJe: 0x84
-              of jtJne: 0x85
-              of jtJg: 0x8F
-              of jtJl: 0x8C
-              of jtJge: 0x8D
-              of jtJle: 0x8E
-              of jtJa: 0x87
-              of jtJb: 0x82
-              of jtJae: 0x83
-              of jtJbe: 0x86
+              case reloc.kind
+              of rkJe: 0x84
+              of rkJne: 0x85
+              of rkJg: 0x8F
+              of rkJl: 0x8C
+              of rkJge: 0x8D
+              of rkJle: 0x8E
+              of rkJa: 0x87
+              of rkJb: 0x82
+              of rkJae: 0x83
+              of rkJbe: 0x86
               else: 0x84  # Default to JE
             newBuf.data.add(byte(longOpcode))
             newBuf.addt32(int32(distance))
+            addedBytes = 6
+            newBuf.addReloc(currentNewPos, reloc.target, reloc.kind, reloc.originalSize)
 
         # Skip the original instruction bytes
-        let originalSize = 
-          case jump.instruction
-          of jtCall, jtJmp: 5
-          else: 6
         i += originalSize
-        inc(jumpIndex)
+        currentNewPos += addedBytes
+        inc(relocIndex)
       else:
-        # Copy non-jump instruction
+        # Copy non-reloc byte
         newBuf.data.add(optimized.data[i])
-        inc(i)
+        i += 1
+        currentNewPos += 1
+
+    # Update labels at the very end
+    if posToLabels.hasKey(i):
+      for labIdx in posToLabels[i]:
+        newBuf.labels[labIdx].position = currentNewPos
 
     # Update the optimized buffer
     optimized = newBuf
-
-    # Update jump positions for next iteration
-    var pos = 0
-    for j in 0..<optimized.jumps.len:
-      optimized.jumps[j].position = pos
-      let instructionSize = 
-        case optimized.jumps[j].instruction
-        of jtCall, jtJmp: 5
-        else: 6
-      pos += instructionSize
+    
+    # Update displacements for next iteration
+    optimized.updateRelocDisplacements()
 
   return optimized
 
@@ -1621,3 +1678,12 @@ proc finalize*(buf: var Buffer) =
   ## Finalize the buffer by optimizing all jump instructions
   let optimized = buf.optimizeJumps()
   buf = optimized
+
+proc emitLea*(dest: var Buffer; reg: Register; target: LabelId) =
+  ## Emit LEA instruction: LEA reg, [RIP + target]
+  let pos = dest.getCurrentPosition()
+  dest.add(0x48) # REX.W
+  dest.add(0x8D) # LEA opcode
+  dest.add(encodeModRM(amIndirect, int(reg), 5)) # Mod=00, Reg=reg, RM=101 (RIP-rel)
+  dest.addt32(0) # Placeholder
+  dest.addReloc(pos, target, rkLea, 7)
