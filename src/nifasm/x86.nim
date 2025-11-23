@@ -1396,6 +1396,55 @@ proc emitPrefetchNta*(dest: var Buffer; reg: Register) =
   dest.add(encodeModRM(amDirect, 0, int(reg)))  # /0 extension
 
 
+# Conditional set instructions
+proc emitSetcc*(dest: var Buffer; code: byte; reg: Register) =
+  ## Emit SETcc reg (set byte if condition)
+  var rex = RexPrefix()
+  if needsRex(reg): rex.b = true
+  if rex.b: dest.add(encodeRex(rex))
+  
+  dest.add(0x0F)
+  dest.add(code)
+  dest.add(encodeModRM(amDirect, 0, int(reg))) # /0 extension not used but format needs reg in r/m field
+
+proc emitSete*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x94, reg)
+proc emitSetne*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x95, reg)
+proc emitSetg*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x9F, reg)
+proc emitSetge*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x9D, reg)
+proc emitSetl*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x9C, reg)
+proc emitSetle*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x9E, reg)
+proc emitSeta*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x97, reg)
+proc emitSetae*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x93, reg)
+proc emitSetb*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x92, reg)
+proc emitSetbe*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x96, reg)
+proc emitSeto*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x90, reg)
+proc emitSets*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x98, reg)
+proc emitSetp*(dest: var Buffer; reg: Register) = dest.emitSetcc(0x9A, reg)
+
+# Stack operations
+proc emitPush*(dest: var Buffer; reg: Register) =
+  ## Emit PUSH reg
+  var rex = RexPrefix()
+  if needsRex(reg): rex.b = true
+  if rex.b: dest.add(encodeRex(rex))
+  dest.add(byte(0x50 + (int(reg) and 7)))
+
+proc emitPush*(dest: var Buffer; imm: int32) =
+  ## Emit PUSH imm32
+  if imm >= -128 and imm <= 127:
+    dest.add(0x6A)
+    dest.add(byte(imm and 0xFF))
+  else:
+    dest.add(0x68)
+    dest.addt32(imm)
+
+proc emitPop*(dest: var Buffer; reg: Register) =
+  ## Emit POP reg
+  var rex = RexPrefix()
+  if needsRex(reg): rex.b = true
+  if rex.b: dest.add(encodeRex(rex))
+  dest.add(byte(0x58 + (int(reg) and 7)))
+
 # Control flow instructions
 proc emitRet*(dest: var Buffer) =
   ## Emit RET instruction

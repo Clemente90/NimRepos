@@ -57,8 +57,13 @@ proc parseRegister(n: var Cursor): Register =
     of R13TagId: R13
     of R14TagId: R14
     of R15TagId: R15
+    # XMMs should be handled but return type prevents it?
+    # Register enum is GPR.
+    # We need to separate XMM parsing or expand Register enum?
+    # x86.nim has Register and XmmRegister.
+    # Let's keep this for GPRs.
     else:
-      error("Expected register, got: " & $t, n)
+      error("Expected GPR register, got: " & $t, n)
       RAX
   inc n
   if n.kind != ParRi: error("Expected ) after register", n)
@@ -796,6 +801,268 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
       else:
         ctx.buf.emitSub(dest.reg, op.reg)
 
+  of MulTagId:
+    let op = parseOperand(n, ctx)
+    if op.isImm: error("MUL immediate not supported", n)
+    if op.isMem: error("MUL memory not supported yet", n) # Need emitMul(mem)
+    ctx.buf.emitMul(op.reg)
+
+  of ImulTagId:
+    # (imul dest src) or (imul dest src imm) - but we only support binary or unary?
+    # doc says (imul D S)
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    if dest.isMem: error("IMUL destination cannot be memory", n)
+    if op.isImm:
+      ctx.buf.emitImulImm(dest.reg, int32(op.immVal))
+    elif op.isMem:
+      error("IMUL memory source not supported yet", n) # Need emitImul(reg, mem)
+    else:
+      ctx.buf.emitImul(dest.reg, op.reg)
+
+  of DivTagId:
+    # (div (rdx) (rax) src)
+    inc n # (rdx)
+    if n.kind != ParLe or n.tag != RdxTagId: error("Expected (rdx) for div", n)
+    inc n
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+    
+    inc n # (rax)
+    if n.kind != ParLe or n.tag != RaxTagId: error("Expected (rax) for div", n)
+    inc n
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+    
+    let op = parseOperand(n, ctx)
+    if op.isImm: error("DIV immediate not supported", n)
+    if op.isMem: error("DIV memory not supported yet", n)
+    ctx.buf.emitDiv(op.reg)
+
+  of IdivTagId:
+    # (idiv (rdx) (rax) src)
+    inc n # (rdx)
+    if n.kind != ParLe or n.tag != RdxTagId: error("Expected (rdx) for idiv", n)
+    inc n
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+    
+    inc n # (rax)
+    if n.kind != ParLe or n.tag != RaxTagId: error("Expected (rax) for idiv", n)
+    inc n
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+    
+    let op = parseOperand(n, ctx)
+    if op.isImm: error("IDIV immediate not supported", n)
+    if op.isMem: error("IDIV memory not supported yet", n)
+    ctx.buf.emitIdiv(op.reg)
+
+  # Bitwise
+  of AndTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    if dest.isMem:
+      error("AND to memory not supported yet", n)
+    else:
+      if op.isImm:
+        ctx.buf.emitAndImm(dest.reg, int32(op.immVal))
+      elif op.isMem:
+        error("AND from memory not supported yet", n)
+      else:
+        ctx.buf.emitAnd(dest.reg, op.reg)
+
+  of OrTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    if dest.isMem:
+      error("OR to memory not supported yet", n)
+    else:
+      if op.isImm:
+        ctx.buf.emitOrImm(dest.reg, int32(op.immVal))
+      elif op.isMem:
+        error("OR from memory not supported yet", n)
+      else:
+        ctx.buf.emitOr(dest.reg, op.reg)
+
+  of XorTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    if dest.isMem:
+      error("XOR to memory not supported yet", n)
+    else:
+      if op.isImm:
+        ctx.buf.emitXorImm(dest.reg, int32(op.immVal))
+      elif op.isMem:
+        error("XOR from memory not supported yet", n)
+      else:
+        ctx.buf.emitXor(dest.reg, op.reg)
+
+  of ShlTagId, SalTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    if dest.isMem: error("Shift destination cannot be memory", n)
+    if op.isImm:
+      ctx.buf.emitShl(dest.reg, int(op.immVal))
+    elif op.reg == RCX:
+      # emitShlCl? x86.nim only has imm count support in emitShl currently?
+      # Need to check x86.nim for CL support or add it.
+      # Existing emitShl takes `count: int`.
+      # We need `emitShlCl(reg)`.
+      error("Shift by CL not supported yet in x86 backend", n)
+    else:
+      error("Shift count must be immediate or CL", n)
+
+  of ShrTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    if dest.isMem: error("Shift destination cannot be memory", n)
+    if op.isImm:
+      ctx.buf.emitShr(dest.reg, int(op.immVal))
+    else:
+      error("Shift count must be immediate", n)
+
+  of SarTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    if dest.isMem: error("Shift destination cannot be memory", n)
+    if op.isImm:
+      ctx.buf.emitSar(dest.reg, int(op.immVal))
+    else:
+      error("Shift count must be immediate", n)
+
+  # Unary
+  of IncTagId:
+    let op = parseDest(n, ctx) # Dest/Src same
+    if op.isMem: error("INC memory not supported yet", n)
+    ctx.buf.emitInc(op.reg)
+
+  of DecTagId:
+    let op = parseDest(n, ctx)
+    if op.isMem: error("DEC memory not supported yet", n)
+    ctx.buf.emitDec(op.reg)
+
+  of NegTagId:
+    let op = parseDest(n, ctx)
+    if op.isMem: error("NEG memory not supported yet", n)
+    ctx.buf.emitNeg(op.reg)
+
+  of NotTagId:
+    let op = parseDest(n, ctx)
+    if op.isMem: error("NOT memory not supported yet", n)
+    ctx.buf.emitNot(op.reg)
+
+  # Comparison
+  of CmpTagId:
+    let dest = parseDest(n, ctx) # Actually just operand 1
+    let op = parseOperand(n, ctx)
+    if dest.isMem:
+      if op.isImm:
+        # CMP m64, imm32
+        error("CMP memory, immediate not supported yet", n)
+      elif op.isMem:
+        error("Cannot compare memory with memory", n)
+      else:
+        ctx.buf.emitCmp(op.reg, dest.mem) # cmp reg, mem? No, cmp mem, reg.
+        # x86.nim: emitCmp(mem, reg) -> CMP r/m64, r64 (39 /r).
+        # Wait, 39 is CMP r/m64, r64 (store in r/m? no, compare r/m with r).
+        # Opcode 39: CMP r/m64, r64. MR encoding.
+        # Operand order: CMP op1, op2.
+        # If op1 is mem, op2 is reg.
+        ctx.buf.emitCmp(dest.mem, op.reg)
+    else:
+      if op.isImm:
+        ctx.buf.emitCmpImm(dest.reg, int32(op.immVal))
+      elif op.isMem:
+        ctx.buf.emitCmp(dest.reg, op.mem)
+      else:
+        ctx.buf.emitCmp(dest.reg, op.reg)
+
+  of TestTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    if dest.isMem:
+      error("TEST memory not supported yet", n)
+    else:
+      if op.isImm:
+        # emitTestImm
+        error("TEST immediate not supported yet", n)
+      elif op.isMem:
+        error("TEST with memory operand not supported yet", n)
+      else:
+        ctx.buf.emitTest(dest.reg, op.reg)
+
+  # Conditional Sets
+  of SeteTagId, SetzTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSete(dest.reg)
+  of SetneTagId, SetnzTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSetne(dest.reg)
+  of SetaTagId, SetnbeTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSeta(dest.reg)
+  of SetaeTagId, SetnbTagId, SetncTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSetae(dest.reg)
+  of SetbTagId, SetnaeTagId, SetcTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSetb(dest.reg)
+  of SetbeTagId, SetnaTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSetbe(dest.reg)
+  of SetgTagId, SetnleTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSetg(dest.reg)
+  of SetgeTagId, SetnlTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSetge(dest.reg)
+  of SetlTagId, SetngeTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSetl(dest.reg)
+  of SetleTagId, SetngTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSetle(dest.reg)
+  of SetoTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSeto(dest.reg)
+  of SetsTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSets(dest.reg)
+  of SetpTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem: error("SETcc memory not supported yet", n)
+    ctx.buf.emitSetp(dest.reg)
+
+  # Stack
+  of PushTagId:
+    let op = parseOperand(n, ctx)
+    if op.isImm:
+      ctx.buf.emitPush(int32(op.immVal))
+    elif op.isMem:
+      error("PUSH memory not supported yet", n)
+    else:
+      ctx.buf.emitPush(op.reg)
+
+  of PopTagId:
+    let dest = parseDest(n, ctx)
+    if dest.isMem:
+      error("POP memory not supported yet", n)
+    else:
+      ctx.buf.emitPop(dest.reg)
+
   of SyscallTagId:
     ctx.buf.emitSyscall()
   of LeaTagId:
@@ -806,6 +1073,141 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
       ctx.buf.emitLea(dest, op.mem)
     else:
       ctx.buf.emitLea(dest, op.label)
+  of JmpTagId:
+    let op = parseOperand(n, ctx)
+    if op.isMem:
+      error("JMP memory not supported yet", n)
+    elif op.label != LabelId(0) or op.typ.kind == UIntT: # Label check
+      # op.label is set if it was a label operand
+      if op.typ.kind == UIntT: # Label address
+         ctx.buf.emitJmp(op.label)
+      else:
+         ctx.buf.emitJmpReg(op.reg)
+    else:
+      ctx.buf.emitJmpReg(op.reg) # Default to reg jump if not label?
+
+  of JeTagId, JzTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJe(op.label)
+  of JneTagId, JnzTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJne(op.label)
+  of JgTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJg(op.label)
+  of JgeTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJge(op.label)
+  of JlTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJl(op.label)
+  of JleTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJle(op.label)
+  of JaTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJa(op.label)
+  of JaeTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJae(op.label)
+  of JbTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJb(op.label)
+  of JbeTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJbe(op.label)
+  of JngTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJle(op.label)
+  of JngeTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJl(op.label)
+  of JnaTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJbe(op.label)
+  of JnaeTagId:
+    let op = parseOperand(n, ctx)
+    if op.typ.kind != UIntT: error("Jump target must be label", n)
+    ctx.buf.emitJb(op.label)
+
+  of NopTagId:
+    ctx.buf.emitNop()
+
+  of RetTagId:
+    ctx.buf.emitRet()
+
+  of LabTagId:
+    # (lab :label)
+    inc n
+    if n.kind != SymbolDef: error("Expected label name", n)
+    let name = getSym(n)
+    let sym = ctx.scope.lookup(name)
+    # Label might not be defined yet if this is inside a proc body?
+    # No, Pass 1 handles types/procs. Labels are local to procs?
+    # Labels are typically declared in Pass 1?
+    # nifasm: labels can be defined inline.
+    # We need to define the label symbol in the scope if not exists, or look it up.
+    # If it's a forward jump, we need to have created it.
+    # Pass 1 does not scan bodies for labels.
+    # So we create it here if missing.
+    if sym == nil:
+       let labId = ctx.buf.createLabel()
+       ctx.scope.define(Symbol(name: name, kind: skLabel, offset: int(labId)))
+       ctx.buf.defineLabel(labId)
+    elif sym.kind == skLabel:
+       if sym.offset == -1:
+          let labId = ctx.buf.createLabel()
+          sym.offset = int(labId)
+          ctx.buf.defineLabel(labId)
+       else:
+          ctx.buf.defineLabel(LabelId(sym.offset))
+    else:
+       error("Symbol is not a label", n)
+    inc n
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+    return # (lab) is a stmt on its own
+
+  of MovapdTagId:
+    # (movapd dest src)
+    let dest = parseDest(n, ctx) # Should check if XMM
+    let op = parseOperand(n, ctx) # Should check if XMM/Mem
+    # Need to support XMM registers in parseRegister/Operand
+    # And emitMovapd (likely similar to movsd but packed)
+    # For now, placeholder error or implement if x86 supports it
+    error("MOVAPD not supported yet", n)
+
+  of MovsdTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    # Dest must be XMM? Or Mem?
+    # x86: MOVSD xmm1, xmm2/m64
+    # MOVSD xmm1/m64, xmm2
+    # So one must be XMM.
+    if dest.isMem and op.isMem:
+      error("MOVSD memory to memory not supported", n)
+    # We need to check if registers are XMM.
+    # Currently parseRegister returns Register enum which is GPR.
+    # We need XmmRegister support.
+    # Let's assume we add XMM support to parseRegister or use a variant.
+    error("MOVSD not fully supported yet (needs XMM register parsing)", n)
+
+  of AddsdTagId, SubsdTagId, MulsdTagId, DivsdTagId:
+    error("Scalar double precision arithmetic not fully supported yet", n)
+
   # ... handle other instructions ...
   else:
     error("Unknown instruction: " & $tag, n)
@@ -926,4 +1328,3 @@ proc assemble*(filename, outfile: string) =
   pass2(n2, ctx)
   
   writeElf(ctx, outfile)
-

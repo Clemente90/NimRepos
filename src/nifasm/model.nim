@@ -70,6 +70,10 @@ type
     JnaI = (ord(JnaTagId), "jna")  ## jump if not above
     JaeI = (ord(JaeTagId), "jae")  ## jump if above or equal
     JnaeI = (ord(JnaeTagId), "jnae")  ## jump if not above or equal
+    JlI = (ord(JlTagId), "jl")  ## jump if less
+    JleI = (ord(JleTagId), "jle")  ## jump if less or equal
+    JbI = (ord(JbTagId), "jb")  ## jump if below
+    JbeI = (ord(JbeTagId), "jbe")  ## jump if below or equal
     CallI = (ord(CallTagId), "call")  ## function call
     RetI = (ord(RetTagId), "ret")  ## return instruction
     PushI = (ord(PushTagId), "push")  ## push to stack

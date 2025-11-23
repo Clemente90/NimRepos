@@ -84,6 +84,10 @@
 | `(jna L)`              | NifasmInst                  | jump if not above |
 | `(jae L)`              | NifasmInst                  | jump if above or equal |
 | `(jnae L)`             | NifasmInst                  | jump if not above or equal |
+| `(jl L)`               | NifasmInst                  | jump if less |
+| `(jle L)`              | NifasmInst                  | jump if less or equal |
+| `(jb L)`               | NifasmInst                  | jump if below |
+| `(jbe L)`              | NifasmInst                  | jump if below or equal |
 | `(call T ...)`         | NifasmInst                  | function call |
 | `(ret)`                | NifasmInst                  | return instruction |
 | `(push O)`             | NifasmInst                  | push to stack |
