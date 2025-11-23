@@ -325,6 +325,7 @@ proc genInst(n: var Cursor; ctx: var GenContext)
 proc pass2Proc(n: var Cursor; ctx: var GenContext) =
   let oldScope = ctx.scope
   ctx.scope = newScope(oldScope)
+  
   inc n
   let name = getSym(n)
   ctx.procName = name
@@ -359,6 +360,12 @@ proc pass2Proc(n: var Cursor; ctx: var GenContext) =
     inc n
   if n.kind != ParRi: error("Expected ) at end of proc", n)
   inc n
+  
+  # Check that all declared cfvars were used exactly once
+  for cfvarName, cfvarSym in ctx.scope.syms:
+    if cfvarSym.kind == skCfvar:
+      if not cfvarSym.used:
+        quit "[Error] Control flow variable '" & cfvarName & "' declared but never used in proc " & ctx.procName
   
   # Patch ssize
   let alignedStackSize = (ctx.slots.stackSize + 15) and not 15
@@ -664,6 +671,12 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
       let name = getSym(n)
       let sym = ctx.scope.lookup(name)
       if sym == nil or sym.kind != skCfvar: error("Expected cfvar in ite condition: " & name, n)
+      
+      # Check if this cfvar has already been used
+      if sym.used:
+        error("Control flow variable '" & name & "' used more than once", n)
+      sym.used = true
+      
       inc n
       
       # When using a cfvar in ite, we don't emit any jump here.
@@ -774,7 +787,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     # Control flow variables are always virtual (bool type, never materialized)
     # We create a label for when this cfvar becomes "true"
     let cfvarLabel = ctx.buf.createLabel()
-    let sym = Symbol(name: name, kind: skCfvar, typ: TypeBool, offset: int(cfvarLabel))
+    let sym = Symbol(name: name, kind: skCfvar, typ: TypeBool, offset: int(cfvarLabel), used: false)
     ctx.scope.define(sym)
     
     if n.kind != ParRi: error("Expected )", n)

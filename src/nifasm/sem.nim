@@ -48,6 +48,9 @@ type
     
     # Proc specific
     sig*: Signature
+    
+    # Control flow variable tracking
+    used*: bool       # For cfvar: has it been used in an ite?
 
   Scope* = ref object
     parent*: Scope
