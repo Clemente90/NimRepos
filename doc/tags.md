@@ -13,9 +13,8 @@
 | `(proc D ...)`         | NifasmDecl                  | proc declaration |
 | `(params ...)`         | NifasmDecl                  | parameters block |
 | `(param D L T)`        | NifasmDecl                  | parameter declaration |
-| `(rets D L T)`         | NifasmDecl                  | return value declaration |
+| `(result D L T)`       | NifasmDecl                  | result value declaration |
 | `(clobber ...)`        | NifasmDecl                  | clobbered registers list |
-| `(body ...)`           | NifasmDecl                  | proc body |
 | `(var D L T)`          | NifasmDecl                  | variable declaration |
 | `(s)`                  | NifasmOther                 | stack slot location tag |
 | `(ssize)`              | NifasmExpr                  | stack size expression |
@@ -102,7 +101,7 @@
 | `(at B I)`             | NifasmExpr                  | array index |
 | `(mem ...)`            | NifasmExpr                  | memory reference |
 | `(rodata L S)`         | NifasmDecl                  | read-only data (string/bytes) |
-
+| `(kill S)`             | NifasmInst                  | kill variable |
 | `(cast T E)`         | NifasmExpr                  | type cast |
 | `(rax)`              | NifasmReg                   | register rax |
 | `(rbx)`              | NifasmReg                   | register rbx |

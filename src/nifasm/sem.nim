@@ -33,7 +33,7 @@ type
 
   Signature* = ref object
     params*: seq[Param]
-    rets*: seq[Param]
+    result*: seq[Param]
     clobbers*: set[Register]
 
   Symbol* = ref object
@@ -65,6 +65,9 @@ proc lookup*(s: Scope; name: string): Symbol =
 
 proc define*(s: Scope; sym: Symbol) =
   s.syms[sym.name] = sym
+
+proc undefine*(s: Scope; name: string) =
+  s.syms.del(name)
 
 proc sizeOf*(t: Type): int =
   case t.kind

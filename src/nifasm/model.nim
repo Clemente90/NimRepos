@@ -84,9 +84,10 @@ type
     IteI = (ord(IteTagId), "ite")  ## if-then-else structure
     LoopI = (ord(LoopTagId), "loop")  ## loop structure
     StmtsI = (ord(StmtsTagId), "stmts")  ## statement block
+    KillI = (ord(KillTagId), "kill")  ## kill variable
 
 proc rawTagIsNifasmInst*(raw: TagEnum): bool {.inline.} =
-  raw >= MovTagId and raw <= StmtsTagId
+  raw in {MovTagId, LeaTagId, MovapdTagId, MovsdTagId, AddTagId, SubTagId, MulTagId, ImulTagId, DivTagId, IdivTagId, AddsdTagId, SubsdTagId, MulsdTagId, DivsdTagId, AndTagId, OrTagId, XorTagId, ShlTagId, ShrTagId, SalTagId, SarTagId, IncTagId, DecTagId, NegTagId, NotTagId, CmpTagId, TestTagId, SeteTagId, SetzTagId, SetneTagId, SetnzTagId, SetaTagId, SetnbeTagId, SetaeTagId, SetnbTagId, SetncTagId, SetbTagId, SetnaeTagId, SetcTagId, SetbeTagId, SetnaTagId, SetgTagId, SetnleTagId, SetgeTagId, SetnlTagId, SetlTagId, SetngeTagId, SetleTagId, SetngTagId, SetoTagId, SetsTagId, SetpTagId, JmpTagId, JeTagId, JzTagId, JneTagId, JnzTagId, JgTagId, JngTagId, JgeTagId, JngeTagId, JaTagId, JnaTagId, JaeTagId, JnaeTagId, JlTagId, JleTagId, JbTagId, JbeTagId, CallTagId, RetTagId, PushTagId, PopTagId, NopTagId, SyscallTagId, LabTagId, IteTagId, LoopTagId, StmtsTagId, KillTagId}
 
 type
   NifasmType* = enum
@@ -111,14 +112,13 @@ type
     ProcD = (ord(ProcTagId), "proc")  ## proc declaration
     ParamsD = (ord(ParamsTagId), "params")  ## parameters block
     ParamD = (ord(ParamTagId), "param")  ## parameter declaration
-    RetsD = (ord(RetsTagId), "rets")  ## return value declaration
+    ResultD = (ord(ResultTagId), "result")  ## result value declaration
     ClobberD = (ord(ClobberTagId), "clobber")  ## clobbered registers list
-    BodyD = (ord(BodyTagId), "body")  ## proc body
     VarD = (ord(VarTagId), "var")  ## variable declaration
     RodataD = (ord(RodataTagId), "rodata")  ## read-only data (string/bytes)
 
 proc rawTagIsNifasmDecl*(raw: TagEnum): bool {.inline.} =
-  raw in {TypeTagId, ProcTagId, ParamsTagId, ParamTagId, RetsTagId, ClobberTagId, BodyTagId, VarTagId, RodataTagId}
+  raw in {TypeTagId, ProcTagId, ParamsTagId, ParamTagId, ResultTagId, ClobberTagId, VarTagId, RodataTagId}
 
 type
   NifasmExpr* = enum

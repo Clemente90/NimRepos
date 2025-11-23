@@ -176,26 +176,15 @@ proc parseParams(n: var Cursor; scope: Scope): seq[Param] =
       error("Expected param declaration", n)
   inc n
 
-proc parseRets(n: var Cursor; scope: Scope): seq[Param] =
-  # (rets (rets :name (reg) Type) ...) ?
-  # Doc says: (rets D L T)
-  # Actually (ret :ret.0 (rax) (i +64)) in single ret?
-  # Let's assume similar structure to params or a single ret block.
-  # (proc ... (rets (ret ...)) ...) ? 
-  # Or (proc ... (rets :name (reg) type) ...) if multiple?
-  # The doc example: (ret :ret.0 (rax) (i +64)) inside proc body.
-  # But signature needs return type.
-  # (proc ... (ret :ret.0 (rax) (i +64)) ...)
-  # Let's support (rets ...) block or single ret?
-  # The tags.md has (rets D L T) as NifasmDecl.
-  # Assuming it's a list of return values.
-  if n.kind == ParLe and n.tag == RetsTagId:
+proc parseResult(n: var Cursor; scope: Scope): seq[Param] =
+  # (result (ret :name (reg) Type) ...)
+  if n.kind == ParLe and n.tag == ResultTagId:
     inc n
-    # if it's a block of rets or a single declaration?
-    # "return value declaration". 
+    # if it's a block of results or a single declaration?
+    # "result value declaration". 
     # Usually return values are just (ret :name (loc) Type)
     # Let's try parsing one.
-    if n.kind != SymbolDef: error("Expected ret name", n)
+    if n.kind != SymbolDef: error("Expected result name", n)
     let name = getSym(n)
     inc n
     var reg = InvalidTagId
@@ -253,30 +242,22 @@ proc pass1(n: var Cursor; scope: Scope) =
           if n.kind != ParRi: error("Expected ) at end of type decl", n)
           inc n
         of ProcTagId:
-          # (proc :Name (params ...) (rets ...) (clobber ...) (body ...))
+          # (proc :Name (params ...) (result ...) (clobber ...) (body ...))
           inc n
           if n.kind != SymbolDef: error("Expected proc name", n)
           let name = getSym(n)
           inc n
           
-          var sig = Signature(params: @[], rets: @[], clobbers: {})
+          var sig = Signature(params: @[], result: @[], clobbers: {})
           
           # Parse params
           if n.kind == ParLe and n.tag == ParamsTagId:
             sig.params = parseParams(n, scope)
           
-          # Parse rets
-          if n.kind == ParLe and n.tag == RetsTagId:
-             # Should return sequence
-             # My parseRets handles single (rets ...) line?
-             # If there are multiple rets, they should be in a block?
-             # Doc says (rets D L T).
-             # Let's assume single return value for now as per typical C ABI.
-             # let p = Param(name: "", typ: TypeVoid) # Placeholder
-             # Actually parseRets adds to seq.
-             # But it consumes the (rets ...) token.
-             var r = parseRets(n, scope)
-             sig.rets = r
+          # Parse result
+          if n.kind == ParLe and n.tag == ResultTagId:
+             var r = parseResult(n, scope)
+             sig.result = r
           
           # Parse clobber
           if n.kind == ParLe and n.tag == ClobberTagId:
@@ -308,6 +289,7 @@ type
     clobbered: set[Register] # Registers clobbered in current flow
     stackSize: int
     ssizePatches: seq[int]
+    freeSlots: seq[tuple[offset, size: int]]
 
   Operand = object
     reg: Register
@@ -696,8 +678,77 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     let sym = Symbol(name: name, kind: skVar, typ: typ)
     if onStack:
        sym.onStack = true
-       ctx.stackSize += alignedSize(typ)
-       sym.offset = -ctx.stackSize # RBP relative
+       # Try to reuse a free slot
+       let size = alignedSize(typ)
+       var foundSlot = -1
+       for i in 0..<ctx.freeSlots.len:
+         if ctx.freeSlots[i].size >= size:
+           foundSlot = i
+           break
+       
+       if foundSlot != -1:
+         let slot = ctx.freeSlots[foundSlot]
+         sym.offset = slot.offset
+         ctx.freeSlots.del(foundSlot)
+         # If the slot is larger, we could split it, but for now we just use it.
+         # Splitting logic:
+         if slot.size > size:
+           ctx.freeSlots.add((slot.offset - size, slot.size - size))
+           # Wait, offset is negative (e.g. -16). size is 8.
+           # Slot: offset -16, size 16 => range [-32, -16).
+           # Used: size 8.
+           # We can use [-24, -16) or [-32, -24).
+           # If we use `slot.offset` (-16), we use [-24, -16).
+           # Remaining is [-32, -24). Offset: -24. Size: 8.
+           # Actually offset grows downwards.
+           # slot.offset is top of slot (closest to 0).
+           # Wait, logic in `ctx.stackSize`: `sym.offset = -ctx.stackSize`.
+           # stackSize grows: 0 -> 8 -> 16.
+           # offsets: -8, -16.
+           # So `offset` is the *bottom* of the slot?
+           # Or top?
+           # If `stackSize` is 8. `sym.offset` = -8.
+           # If `stackSize` becomes 16. Next `sym.offset` = -16.
+           # So `offset` points to the start of the object in memory?
+           # x86 stack grows down. [rbp-8] is first qword.
+           # So `offset` is usually the address of the variable.
+           # So [-8] is occupied.
+           # If I have a slot of size 16 at -16. (occupies [-16, -32]?)
+           # No, `alignedSize` is usually just size.
+           # If `stackSize` increases by `alignedSize`.
+           # Let's look at pass2 init:
+           # `ctx.stackSize = 0`.
+           # `ctx.stackSize += alignedSize(typ)`.
+           # `sym.offset = -ctx.stackSize`.
+           # If typ size 8. stackSize = 8. offset = -8.
+           # If typ size 8. stackSize = 16. offset = -16.
+           # So `sym.offset` is the lower address.
+           # And the variable occupies [offset, offset + size).
+           # [-8, 0). [-16, -8).
+           # Yes.
+           # So if I have free slot (offset: -16, size: 16). Range [-16, 0).
+           # No, if I freed 2 vars of size 8.
+           # Freed var at -8 (size 8). Range [-8, 0).
+           # Freed var at -16 (size 8). Range [-16, -8).
+           # If I merge them -> (-16, 16). Range [-16, 0).
+           # If I reuse for size 8.
+           # Use offset -16? That covers [-16, -8).
+           # Remaining [-8, 0). Offset -8. Size 8.
+           # Correct?
+           # Let's trace:
+           # Free slot: `offset` = -16. `size` = 16.
+           # Range is [offset, offset + size). [-16, 0).
+           # Need size 8.
+           # If I use `sym.offset = slot.offset` (-16).
+           # `sym` uses [-16, -8).
+           # Remaining: [-8, 0).
+           # New free slot: `offset` = -8? (-16 + 8). `size` = 8 (16-8).
+           # Yes.
+           # So: `ctx.freeSlots.add((slot.offset + size, slot.size - size))`
+           
+       else:
+         ctx.stackSize += size
+         sym.offset = -ctx.stackSize
     else:
        sym.reg = reg
        
@@ -707,7 +758,28 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     inc n
     return
 
+  if tag == KillTagId:
+    inc n
+    if n.kind != Symbol: error("Expected symbol to kill", n)
+    let name = getSym(n)
+    let sym = ctx.scope.lookup(name)
+    if sym == nil: error("Unknown variable to kill: " & name, n)
+    
+    if sym.onStack:
+      ctx.freeSlots.add((sym.offset, alignedSize(sym.typ)))
+      # Optional: merge free slots?
+      # For now just append.
+      
+    # Remove from scope to ensure it's not used again
+    ctx.scope.undefine(name)
+    
+    inc n
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+    return
+
   inc n
+
   case tag
   of MovTagId:
     let dest = parseDest(n, ctx)
@@ -1250,9 +1322,9 @@ proc pass2(n: var Cursor; ctx: var GenContext) =
               ctx.scope.define(Symbol(name: param.name, kind: skParam, typ: param.typ, reg: param.reg))
 
           inc n
-          while n.kind == ParLe and n.tag != BodyTagId:
+          while n.kind == ParLe and n.tag != StmtsTagId:
             skip n
-          if n.kind == ParLe and n.tag == BodyTagId:
+          if n.kind == ParLe and n.tag == StmtsTagId:
             inc n
             while n.kind != ParRi:
               genInst(n, ctx)
