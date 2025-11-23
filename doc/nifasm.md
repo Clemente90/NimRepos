@@ -128,9 +128,68 @@ Since local variables are described precisely, it is possible to detect code gen
 
 ## Control flow
 
-As in NJVL the control flow consists of `(loop)` and `(ite)` (if-then-else) constructs. The control flow variables exist too. As in NJVL the tags `cfvar` and `jtrue` are used for these. There is a big difference to NJVL though: All control flow variables are always virtual: They are never materialized and the `jtrue` instruction is always mapped to a jump. The first implementations of `nifasm` do not check if these jumps would skip useful instructions and are the result of a buggy code generator.
+As in NJVL the control flow consists of `(loop)` and `(ite)` (if-then-else) constructs. Control flow variables are also supported via the `cfvar` and `jtrue` tags.
 
-Example:
+### Control flow variables
+
+Control flow variables (`cfvar`) are special boolean variables used to represent control flow in a structured way. They bridge the gap between high-level structured control flow and low-level jumps.
+
+**Declaration:**
+
+```
+(cfvar :name.0)
+```
+
+Declares a control flow variable named `name.0`. Control flow variables are always implicitly of type `(bool)` and implicitly initialized to `false`. No type annotation or initializer should be provided.
+
+**Properties:**
+- Always initialized to `false`
+- Can only be set to `true` via the `jtrue` instruction
+- Have monotonic behavior: once set to `true`, they stay `true`
+- Are **always virtual** in nifasm: they are never materialized into actual registers or memory
+- The assembler always maps them to jumps
+
+### The `jtrue` instruction
+
+The `jtrue` instruction sets one or more control flow variables to `true`:
+
+```
+(jtrue cfvar1.0)
+(jtrue cfvar1.0 cfvar2.0 cfvar3.0)  # Can set multiple cfvars at once
+```
+
+**Semantics:**
+- Sets the specified control flow variable(s) to `true`
+- In nifasm, `jtrue` is **always lowered to an unconditional jump** to the appropriate target
+- The jump target is determined by the control flow structure containing the `jtrue`
+
+### Using `cfvar` with `ite`
+
+When a control flow variable is used as the condition in an `ite` construct, it has **special semantics** - it does not produce or evaluate a condition at all! Instead:
+
+```
+(ite cfvar.0
+  (stmts
+    # "then" branch - executed if cfvar.0 was set to true
+    (mov (rax) +1)
+  )
+  (stmts
+    # "else" branch - executed if cfvar.0 is still false
+    (mov (rbx) +3)
+  )
+)
+```
+
+**Behavior:**
+- If `cfvar.0` was set to `true` (via `jtrue`), the "then" branch executes
+- If `cfvar.0` is still `false`, the "then" branch is skipped and the "else" branch executes
+- The assembler recognizes this pattern and generates appropriate jump instructions
+
+This is different from using a hardware flag or register as a condition. With a cfvar, there is no condition evaluation - the control flow was already determined by previous `jtrue` instructions.
+
+### Testing hardware flags
+
+The `ite` construct can also test hardware flags directly:
 
 ```
 (ite (of) # test overflow flag
@@ -141,13 +200,64 @@ Example:
     (mov (rbx) +3)
   )
 )
+```
 
+Common flags include:
+- `(zf)` - zero flag
+- `(of)` - overflow flag
+- `(cf)` - carry flag
+- `(sf)` - sign flag
+- `(pf)` - parity flag
+
+### Loop construct
+
+Loops follow the same pattern as in NJVL:
+
+```
 (loop
   (stmts ...) # before the condition
-  (zf) # test zero flag
-  (stmts ...) # zero flag is 1
+  (zf) # condition (can be a flag or cfvar)
+  (stmts ...) # body - executed when condition is true
+  (stmts ...) # after - executed when loop exits
 )
 ```
+
+A `loop` always has 4 sections: setup, condition, body, and after.
+
+### Example: Control flow variable usage
+
+Here's how `cfvar` and `jtrue` work together:
+
+```
+# Translate: if cond1 or cond2: body else: otherwise
+
+(cfvar :tmp.0)
+(cmp (rax) +0)
+(ite (zf)
+  (stmts
+    (jtrue tmp.0)  # If cond1 is true, set tmp and jump
+  )
+  (stmts
+    (cmp (rbx) +0)
+    (ite (zf)
+      (stmts
+        (jtrue tmp.0)  # If cond2 is true, set tmp and jump
+      )
+      (stmts)
+    )
+  )
+)
+(ite tmp.0  # Special case: test cfvar without condition
+  (stmts
+    # body - executed if tmp.0 was set to true
+  )
+  (stmts
+    # otherwise - executed if tmp.0 is still false
+  )
+)
+```
+
+The `jtrue` instructions are lowered to jumps that skip to the appropriate branch of the outer `ite tmp.0`. The assembler ensures this happens without materializing `tmp.0` into any register.
 
 ## Addressing modes
 

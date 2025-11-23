@@ -305,6 +305,7 @@ type
     scope: Scope
     buf: Buffer
     procName: string
+    inCall: bool
     clobbered: set[Register] # Registers clobbered in current flow
     slots: SlotManager
     ssizePatches: seq[int]
@@ -548,6 +549,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   let start = n
   
   if tag == CallTagId:
+    if ctx.inCall: error("Nested calls are not allowed", n)
+    ctx.inCall = true
+    defer: ctx.inCall = false
     # (call target (mov arg val) ...)
     inc n
     if n.kind != Symbol: error("Expected proc symbol", n)
