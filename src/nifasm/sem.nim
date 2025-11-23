@@ -1,6 +1,6 @@
 
 import std / [tables]
-import tags
+import tags, x86
 
 type
   TypeKind* = enum
@@ -19,8 +19,22 @@ type
       size*: int
       align*: int
 
+  TypeDuo* = object
+    want*, got*: Type
+
   SymKind* = enum
     skUnknown, skType, skVar, skParam, skProc, skLabel, skRodata
+
+  Param* = object
+    name*: string
+    typ*: Type
+    reg*: TagEnum
+    onStack*: bool
+
+  Signature* = ref object
+    params*: seq[Param]
+    rets*: seq[Param]
+    clobbers*: set[Register]
 
   Symbol* = ref object
     name*: string
@@ -32,6 +46,9 @@ type
     offset*: int      # Stack offset, label position, or field offset
     size*: int        # For stack slots
     
+    # Proc specific
+    sig*: Signature
+
   Scope* = ref object
     parent*: Scope
     syms*: Table[string, Symbol]
@@ -58,10 +75,44 @@ proc sizeOf*(t: Type): int =
   of ArrayT: t.len.int * sizeOf(t.elem)
   of ObjectT: t.size
 
+proc `$`*(t: Type): string =
+  case t.kind
+  of ErrorT: "error"
+  of VoidT: "void"
+  of BoolT: "bool"
+  of IntT: "(i " & $t.bits & ")"
+  of UIntT: "(u " & $t.bits & ")"
+  of FloatT: "(f " & $t.bits & ")"
+  of PtrT: "(ptr " & $t.base & ")"
+  of AptrT: "(aptr " & $t.base & ")"
+  of ArrayT: "(array " & $t.elem & " " & $t.len & ")"
+  of ObjectT: "object" # Simplified
+
+proc compatible*(want, got: Type): bool =
+  if want == got: return true
+  if want.kind == ErrorT or got.kind == ErrorT: return true # prevent cascading errors
+  if want.kind == VoidT and got.kind == VoidT: return true
+  if want.kind == BoolT and got.kind == BoolT: return true
+  if want.kind == IntT and got.kind == IntT: return want.bits == got.bits
+  if want.kind == UIntT and got.kind == UIntT: return want.bits == got.bits
+  if want.kind == FloatT and got.kind == FloatT: return want.bits == got.bits
+  if want.kind == PtrT and got.kind == PtrT: return compatible(want.base, got.base)
+  if want.kind == AptrT and got.kind == AptrT: return compatible(want.base, got.base)
+  if want.kind == ArrayT and got.kind == ArrayT:
+    return want.len == got.len and compatible(want.elem, got.elem)
+  # Object structural equivalence or name based?
+  # Using reference equality for now (assuming unique type objects per declaration)
+  # If we want structural:
+  if want.kind == ObjectT and got.kind == ObjectT:
+    # For now, just check size or ref equality
+    return want == got
+  return false
+
 # Predefined types
 let
   TypeBool* = Type(kind: BoolT)
   TypeInt64* = Type(kind: IntT, bits: 64)
   TypeUInt64* = Type(kind: UIntT, bits: 64)
+  TypeFloat64* = Type(kind: FloatT, bits: 64)
   TypeVoid* = Type(kind: VoidT)
-
+  TypeError* = Type(kind: ErrorT)

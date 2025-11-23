@@ -2,7 +2,6 @@
 # A dependency-free x86_64 assembler that emits binary instruction bytes
 
 import std/[strutils, tables]
-import elf
 
 type
   # x86_64 64-bit general purpose registers
@@ -178,6 +177,40 @@ proc encodeSIB*(scale: int; index: int; base: int): byte =
     else: 0b00
   byte((scaleBits shl 6) or ((index and 0x07) shl 3) or (base and 0x07))
 
+proc emitMem(dest: var Buffer; reg: int; mem: MemoryOperand) =
+  # Emit ModRM (and SIB/Disp) for memory operand
+  var modb = 0
+  var rmb = int(mem.base) and 7
+  var sib = false
+  var dispSize = 0 # 0, 1, 4
+
+  if mem.hasIndex or mem.base == RSP or mem.base == R12:
+    sib = true
+    rmb = 4 # SIB follows
+
+  # Determine Mod and DispSize
+  if mem.displacement == 0 and (mem.base != RBP and mem.base != R13):
+    modb = 0b00 # Indirect
+  elif mem.displacement >= -128 and mem.displacement <= 127:
+    modb = 0b01 # Indirect + Disp8
+    dispSize = 1
+  else:
+    modb = 0b10 # Indirect + Disp32
+    dispSize = 4
+
+  dest.add(encodeModRM(AddressingMode(modb), reg, rmb))
+
+  if sib:
+    var index = 4 # None (RSP)
+    if mem.hasIndex:
+      index = int(mem.index)
+    dest.add(encodeSIB(mem.scale, index, int(mem.base)))
+
+  if dispSize == 1:
+    dest.add(byte(mem.displacement and 0xFF))
+  elif dispSize == 4:
+    dest.addt32(mem.displacement)
+
 # Core MOV instruction implementations
 proc emitMov*(dest: var Buffer; a, b: Register) =
   ## Emit MOV instruction: MOV a, b (move from b to a)
@@ -191,6 +224,32 @@ proc emitMov*(dest: var Buffer; a, b: Register) =
 
   dest.add(0x89)  # MOV r/m64, r64 opcode
   dest.add(encodeModRM(amDirect, int(a), int(b)))
+
+proc emitMov*(dest: var Buffer; reg: Register; mem: MemoryOperand) =
+  ## Emit MOV instruction: MOV reg, mem (load)
+  var rex = RexPrefix(w: true)
+  if needsRex(reg): rex.r = true
+  if needsRex(mem.base): rex.b = true
+  if mem.hasIndex and needsRex(mem.index): rex.x = true
+  
+  if rex.r or rex.b or rex.x or rex.w:
+    dest.add(encodeRex(rex))
+    
+  dest.add(0x8B) # MOV r64, r/m64
+  dest.emitMem(int(reg), mem)
+
+proc emitMov*(dest: var Buffer; mem: MemoryOperand; reg: Register) =
+  ## Emit MOV instruction: MOV mem, reg (store)
+  var rex = RexPrefix(w: true)
+  if needsRex(reg): rex.r = true
+  if needsRex(mem.base): rex.b = true
+  if mem.hasIndex and needsRex(mem.index): rex.x = true
+  
+  if rex.r or rex.b or rex.x or rex.w:
+    dest.add(encodeRex(rex))
+    
+  dest.add(0x89) # MOV r/m64, r64
+  dest.emitMem(int(reg), mem)
 
 proc emitMovImmToReg*(dest: var Buffer; reg: Register; imm: int64) =
   ## Emit MOV instruction: MOV reg, imm
@@ -235,6 +294,32 @@ proc emitAdd*(dest: var Buffer; a, b: Register) =
   dest.add(0x01)  # ADD r/m64, r64 opcode
   dest.add(encodeModRM(amDirect, int(a), int(b)))
 
+proc emitAdd*(dest: var Buffer; reg: Register; mem: MemoryOperand) =
+  ## Emit ADD instruction: ADD reg, mem
+  var rex = RexPrefix(w: true)
+  if needsRex(reg): rex.r = true
+  if needsRex(mem.base): rex.b = true
+  if mem.hasIndex and needsRex(mem.index): rex.x = true
+  
+  if rex.r or rex.b or rex.x or rex.w:
+    dest.add(encodeRex(rex))
+    
+  dest.add(0x03) # ADD r64, r/m64
+  dest.emitMem(int(reg), mem)
+
+proc emitAdd*(dest: var Buffer; mem: MemoryOperand; reg: Register) =
+  ## Emit ADD instruction: ADD mem, reg
+  var rex = RexPrefix(w: true)
+  if needsRex(reg): rex.r = true
+  if needsRex(mem.base): rex.b = true
+  if mem.hasIndex and needsRex(mem.index): rex.x = true
+  
+  if rex.r or rex.b or rex.x or rex.w:
+    dest.add(encodeRex(rex))
+    
+  dest.add(0x01) # ADD r/m64, r64
+  dest.emitMem(int(reg), mem)
+
 proc emitSub*(dest: var Buffer; a, b: Register) =
   ## Emit SUB instruction: SUB a, b
   var rex = RexPrefix(w: true)
@@ -247,6 +332,32 @@ proc emitSub*(dest: var Buffer; a, b: Register) =
 
   dest.add(0x29)  # SUB r/m64, r64 opcode
   dest.add(encodeModRM(amDirect, int(a), int(b)))
+
+proc emitSub*(dest: var Buffer; reg: Register; mem: MemoryOperand) =
+  ## Emit SUB instruction: SUB reg, mem
+  var rex = RexPrefix(w: true)
+  if needsRex(reg): rex.r = true
+  if needsRex(mem.base): rex.b = true
+  if mem.hasIndex and needsRex(mem.index): rex.x = true
+  
+  if rex.r or rex.b or rex.x or rex.w:
+    dest.add(encodeRex(rex))
+    
+  dest.add(0x2B) # SUB r64, r/m64
+  dest.emitMem(int(reg), mem)
+
+proc emitSub*(dest: var Buffer; mem: MemoryOperand; reg: Register) =
+  ## Emit SUB instruction: SUB mem, reg
+  var rex = RexPrefix(w: true)
+  if needsRex(reg): rex.r = true
+  if needsRex(mem.base): rex.b = true
+  if mem.hasIndex and needsRex(mem.index): rex.x = true
+  
+  if rex.r or rex.b or rex.x or rex.w:
+    dest.add(encodeRex(rex))
+    
+  dest.add(0x29) # SUB r/m64, r64
+  dest.emitMem(int(reg), mem)
 
 proc emitImul*(dest: var Buffer; a, b: Register) =
   ## Emit IMUL instruction: IMUL a, b (signed multiply)
@@ -360,6 +471,32 @@ proc emitCmp*(dest: var Buffer; a, b: Register) =
 
   dest.add(0x39)  # CMP r/m64, r64 opcode
   dest.add(encodeModRM(amDirect, int(a), int(b)))
+
+proc emitCmp*(dest: var Buffer; reg: Register; mem: MemoryOperand) =
+  ## Emit CMP instruction: CMP reg, mem
+  var rex = RexPrefix(w: true)
+  if needsRex(reg): rex.r = true
+  if needsRex(mem.base): rex.b = true
+  if mem.hasIndex and needsRex(mem.index): rex.x = true
+  
+  if rex.r or rex.b or rex.x or rex.w:
+    dest.add(encodeRex(rex))
+    
+  dest.add(0x3B) # CMP r64, r/m64
+  dest.emitMem(int(reg), mem)
+
+proc emitCmp*(dest: var Buffer; mem: MemoryOperand; reg: Register) =
+  ## Emit CMP instruction: CMP mem, reg
+  var rex = RexPrefix(w: true)
+  if needsRex(reg): rex.r = true
+  if needsRex(mem.base): rex.b = true
+  if mem.hasIndex and needsRex(mem.index): rex.x = true
+  
+  if rex.r or rex.b or rex.x or rex.w:
+    dest.add(encodeRex(rex))
+    
+  dest.add(0x39) # CMP r/m64, r64
+  dest.emitMem(int(reg), mem)
 
 proc emitTest*(dest: var Buffer; a, b: Register) =
   ## Emit TEST instruction: TEST a, b (test)
@@ -1748,3 +1885,16 @@ proc emitLea*(dest: var Buffer; reg: Register; target: LabelId) =
   dest.add(encodeModRM(amIndirect, int(reg), 5)) # Mod=00, Reg=reg, RM=101 (RIP-rel)
   dest.addt32(0) # Placeholder
   dest.addReloc(pos, target, rkLea, 7)
+
+proc emitLea*(dest: var Buffer; reg: Register; mem: MemoryOperand) =
+  ## Emit LEA instruction: LEA reg, mem
+  var rex = RexPrefix(w: true)
+  if needsRex(reg): rex.r = true
+  if needsRex(mem.base): rex.b = true
+  if mem.hasIndex and needsRex(mem.index): rex.x = true
+  
+  if rex.r or rex.b or rex.x or rex.w:
+    dest.add(encodeRex(rex))
+    
+  dest.add(0x8D) # LEA r64, m
+  dest.emitMem(int(reg), mem)

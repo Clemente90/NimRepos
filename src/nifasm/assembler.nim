@@ -1,0 +1,929 @@
+
+import std / [tables, streams, os]
+import "../../../nimony/src/lib" / [nifreader, nifstreams, nifcursors, bitabs, lineinfos]
+import tags, model
+import x86, elf
+import sem
+
+proc tag(n: Cursor): TagEnum = cast[TagEnum](n.tagId)
+
+proc infoStr(n: Cursor): string =
+  if n.info.isValid:
+    let raw = unpack(pool.man, n.info)
+    result = pool.files[raw.file] & "(" & $raw.line & ", " & $raw.col & ")"
+  else:
+    result = "???"
+
+proc error(msg: string; n: Cursor) =
+  quit "[Error] " & msg & " at " & infoStr(n)
+
+proc typeError(want, got: Type; n: Cursor) =
+  error("Type mismatch: expected " & $want & ", got " & $got, n)
+
+proc getInt(n: Cursor): int64 =
+  if n.kind == IntLit:
+    result = pool.integers[n.intId]
+  else:
+    error("Expected integer literal", n)
+
+proc getSym(n: Cursor): string =
+  if n.kind in {Symbol, SymbolDef}:
+    result = pool.syms[n.symId]
+  else:
+    error("Expected symbol", n)
+
+proc getStr(n: Cursor): string =
+  if n.kind == StringLit:
+    result = pool.strings[n.litId]
+  else:
+    error("Expected string literal", n)
+
+proc parseRegister(n: var Cursor): Register =
+  let t = n.tag
+  result = case t
+    of RaxTagId, R0TagId: RAX
+    of RcxTagId, R2TagId: RCX
+    of RdxTagId, R3TagId: RDX
+    of RbxTagId, R1TagId: RBX
+    of RspTagId, R7TagId: RSP
+    of RbpTagId, R6TagId: RBP
+    of RsiTagId, R4TagId: RSI
+    of RdiTagId, R5TagId: RDI
+    of R8TagId: R8
+    of R9TagId: R9
+    of R10TagId: R10
+    of R11TagId: R11
+    of R12TagId: R12
+    of R13TagId: R13
+    of R14TagId: R14
+    of R15TagId: R15
+    else:
+      error("Expected register, got: " & $t, n)
+      RAX
+  inc n
+  if n.kind != ParRi: error("Expected ) after register", n)
+  inc n
+
+proc parseType(n: var Cursor; scope: Scope): Type =
+  if n.kind == Symbol:
+    let name = getSym(n)
+    let sym = scope.lookup(name)
+    if sym == nil or sym.kind != skType:
+      error("Unknown type: " & name, n)
+    result = sym.typ
+    inc n
+  elif n.kind == ParLe:
+    let t = n.tag
+    inc n
+    case t
+    of BoolTagId:
+      result = TypeBool
+    of ITagId:
+      result = Type(kind: IntT, bits: int(getInt(n)))
+      inc n
+    of UTagId:
+      result = Type(kind: UIntT, bits: int(getInt(n)))
+      inc n
+    of FTagId:
+      result = Type(kind: FloatT, bits: int(getInt(n)))
+      inc n
+    of PtrTagId:
+      let base = parseType(n, scope)
+      result = Type(kind: PtrT, base: base)
+    of AptrTagId:
+      let base = parseType(n, scope)
+      result = Type(kind: AptrT, base: base)
+    of ArrayTagId:
+      let elem = parseType(n, scope)
+      let len = getInt(n)
+      inc n
+      result = Type(kind: ArrayT, elem: elem, len: len)
+    else:
+      error("Unknown type tag: " & $t, n)
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+  else:
+    error("Expected type", n)
+
+proc parseObjectBody(n: var Cursor; scope: Scope): Type =
+  var fields: seq[(string, Type)] = @[]
+  var offset = 0
+  inc n 
+  while n.kind != ParRi:
+    if n.kind == ParLe and n.tag == FldTagId:
+      inc n
+      if n.kind != SymbolDef: error("Expected field name", n)
+      let name = getSym(n)
+      inc n
+      let ftype = parseType(n, scope)
+      fields.add (name, ftype)
+      let size = sizeOf(ftype)
+      offset += size
+      if n.kind != ParRi: error("Expected )", n)
+      inc n
+    else:
+      error("Expected field definition", n)
+  inc n
+  result = Type(kind: ObjectT, fields: fields, size: offset)
+
+proc alignedSize(t: Type): int =
+  (sizeOf(t) + 7) and not 7
+
+proc parseParams(n: var Cursor; scope: Scope): seq[Param] =
+  # (params (param :name (reg) Type) ...)
+  inc n # params
+  while n.kind != ParRi:
+    if n.kind == ParLe and n.tag == ParamTagId:
+      inc n # param
+      if n.kind != SymbolDef: error("Expected param name", n)
+      let name = getSym(n)
+      inc n
+      
+      # (reg) or (s) location
+      var reg = InvalidTagId
+      var onStack = false
+      if n.kind == ParLe:
+        let locTag = n.tag
+        if rawTagIsNifasmReg(locTag):
+          reg = locTag
+          inc n
+          if n.kind != ParRi: error("Expected )", n)
+          inc n
+        elif locTag == STagId:
+          onStack = true
+          inc n
+          if n.kind != ParRi: error("Expected )", n)
+          inc n
+        else:
+          # Stack or other location, skip for now
+          inc n
+          if n.kind != ParRi: error("Expected )", n)
+          inc n
+      else:
+        error("Expected location", n)
+        
+      let typ = parseType(n, scope)
+      result.add Param(name: name, typ: typ, reg: reg, onStack: onStack)
+      
+      if n.kind != ParRi: error("Expected )", n)
+      inc n
+    else:
+      error("Expected param declaration", n)
+  inc n
+
+proc parseRets(n: var Cursor; scope: Scope): seq[Param] =
+  # (rets (rets :name (reg) Type) ...) ?
+  # Doc says: (rets D L T)
+  # Actually (ret :ret.0 (rax) (i +64)) in single ret?
+  # Let's assume similar structure to params or a single ret block.
+  # (proc ... (rets (ret ...)) ...) ? 
+  # Or (proc ... (rets :name (reg) type) ...) if multiple?
+  # The doc example: (ret :ret.0 (rax) (i +64)) inside proc body.
+  # But signature needs return type.
+  # (proc ... (ret :ret.0 (rax) (i +64)) ...)
+  # Let's support (rets ...) block or single ret?
+  # The tags.md has (rets D L T) as NifasmDecl.
+  # Assuming it's a list of return values.
+  if n.kind == ParLe and n.tag == RetsTagId:
+    inc n
+    # if it's a block of rets or a single declaration?
+    # "return value declaration". 
+    # Usually return values are just (ret :name (loc) Type)
+    # Let's try parsing one.
+    if n.kind != SymbolDef: error("Expected ret name", n)
+    let name = getSym(n)
+    inc n
+    var reg = InvalidTagId
+    if n.kind == ParLe:
+      let locTag = n.tag
+      if rawTagIsNifasmReg(locTag):
+        reg = locTag
+        inc n
+        if n.kind != ParRi: error("Expected )", n)
+        inc n
+      else:
+        inc n
+        if n.kind != ParRi: error("Expected )", n)
+        inc n
+    else:
+      error("Expected location", n)
+    let typ = parseType(n, scope)
+    result.add Param(name: name, typ: typ, reg: reg)
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+  else:
+    # Maybe no return values
+    discard
+
+proc parseClobbers(n: var Cursor): set[Register] =
+  # (clobber (rax) (rbx) ...)
+  if n.kind == ParLe and n.tag == ClobberTagId:
+    inc n
+    while n.kind != ParRi:
+      if n.kind == ParLe and rawTagIsNifasmReg(n.tag):
+        result.incl parseRegister(n)
+      else:
+        error("Expected register in clobber list", n)
+    inc n
+
+proc pass1(n: var Cursor; scope: Scope) =
+  var n = n
+  if n.kind == ParLe and n.tag == StmtsTagId:
+    inc n
+    while n.kind != ParRi:
+      if n.kind == ParLe:
+        let start = n
+        case n.tag
+        of TypeTagId:
+          inc n
+          if n.kind != SymbolDef: error("Expected type name", n)
+          let name = getSym(n)
+          inc n
+          if n.kind == ParLe and n.tag == ObjectTagId:
+            let typ = parseObjectBody(n, scope)
+            scope.define(Symbol(name: name, kind: skType, typ: typ))
+          else:
+            let typ = parseType(n, scope)
+            scope.define(Symbol(name: name, kind: skType, typ: typ))
+          if n.kind != ParRi: error("Expected ) at end of type decl", n)
+          inc n
+        of ProcTagId:
+          # (proc :Name (params ...) (rets ...) (clobber ...) (body ...))
+          inc n
+          if n.kind != SymbolDef: error("Expected proc name", n)
+          let name = getSym(n)
+          inc n
+          
+          var sig = Signature(params: @[], rets: @[], clobbers: {})
+          
+          # Parse params
+          if n.kind == ParLe and n.tag == ParamsTagId:
+            sig.params = parseParams(n, scope)
+          
+          # Parse rets
+          if n.kind == ParLe and n.tag == RetsTagId:
+             # Should return sequence
+             # My parseRets handles single (rets ...) line?
+             # If there are multiple rets, they should be in a block?
+             # Doc says (rets D L T).
+             # Let's assume single return value for now as per typical C ABI.
+             # let p = Param(name: "", typ: TypeVoid) # Placeholder
+             # Actually parseRets adds to seq.
+             # But it consumes the (rets ...) token.
+             var r = parseRets(n, scope)
+             sig.rets = r
+          
+          # Parse clobber
+          if n.kind == ParLe and n.tag == ClobberTagId:
+            sig.clobbers = parseClobbers(n)
+            
+          let sym = Symbol(name: name, kind: skProc, sig: sig)
+          scope.define(sym)
+          
+          n = start
+          skip n
+        of RodataTagId:
+          inc n
+          if n.kind != SymbolDef: error("Expected rodata name", n)
+          let name = getSym(n)
+          scope.define(Symbol(name: name, kind: skRodata))
+          n = start
+          skip n
+        else:
+          skip n
+      else:
+        skip n
+    inc n
+
+type
+  GenContext = object
+    scope: Scope
+    buf: Buffer
+    procName: string
+    clobbered: set[Register] # Registers clobbered in current flow
+    stackSize: int
+    ssizePatches: seq[int]
+
+  Operand = object
+    reg: Register
+    typ: Type
+    isImm: bool
+    immVal: int64
+    isMem: bool
+    mem: MemoryOperand
+    isSsize: bool
+    label: LabelId
+
+proc genInst(n: var Cursor; ctx: var GenContext)
+
+proc genStmt(n: var Cursor; ctx: var GenContext) =
+  if n.kind == ParLe and n.tag == StmtsTagId:
+    inc n
+    while n.kind != ParRi:
+      genInst(n, ctx)
+    inc n
+  else:
+    genInst(n, ctx)
+
+proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil): Operand =
+  if n.kind == ParLe:
+    let t = n.tag
+    if rawTagIsNifasmReg(t):
+      result.reg = parseRegister(n)
+      result.typ = TypeInt64 # Explicit register usage is assumed to be Int64 compatible
+    elif t == LabTagId:
+      inc n
+      if n.kind != Symbol: error("Expected label usage", n)
+      let name = getSym(n)
+      let sym = ctx.scope.lookup(name)
+      if sym == nil or sym.kind != skLabel: error("Unknown label: " & name, n)
+      inc n
+      if n.kind != ParRi: error("Expected )", n)
+      inc n
+      result.reg = RAX
+      result.label = LabelId(sym.offset)
+      # Label address type is pointer to code?
+      result.typ = TypeUInt64 # Address
+    elif t == CastTagId:
+      inc n
+      let castType = parseType(n, ctx.scope)
+      # Cast allows us to opt-out of type system, so we don't check against expectedType here
+      var op = parseOperand(n, ctx, nil)
+      op.typ = castType
+      result = op
+      if n.kind != ParRi: error("Expected ) after cast", n)
+      inc n
+    elif t == SsizeTagId:
+      result.isSsize = true
+      result.typ = TypeInt64
+      inc n
+      if n.kind != ParRi: error("Expected )", n)
+      inc n
+    else:
+      error("Unexpected operand tag: " & $t, n)
+  elif n.kind == IntLit:
+    result.isImm = true
+    result.immVal = getInt(n)
+    inc n
+    # Immediate type inference?
+    # If expectedType is provided, try to match it.
+    if expectedType != nil and (expectedType.kind in {IntT, UIntT, FloatT}):
+        result.typ = expectedType
+    else:
+        result.typ = TypeInt64 # Default
+  elif n.kind == Symbol:
+    let name = getSym(n)
+    let sym = ctx.scope.lookup(name)
+    if sym != nil and (sym.kind == skVar or sym.kind == skParam):
+      if sym.onStack:
+        result.isMem = true
+        result.mem = MemoryOperand(base: RBP, displacement: int32(sym.offset))
+        result.typ = sym.typ
+      elif sym.reg != InvalidTagId:
+        result.reg = case sym.reg
+          of RaxTagId, R0TagId: RAX
+          of RcxTagId, R2TagId: RCX
+          of RdxTagId, R3TagId: RDX
+          of RbxTagId, R1TagId: RBX
+          of RspTagId, R7TagId: RSP
+          of RbpTagId, R6TagId: RBP
+          of RsiTagId, R4TagId: RSI
+          of RdiTagId, R5TagId: RDI
+          of R8TagId: R8
+          of R9TagId: R9
+          of R10TagId: R10
+          of R11TagId: R11
+          of R12TagId: R12
+          of R13TagId: R13
+          of R14TagId: R14
+          of R15TagId: R15
+          else: RAX
+      
+        # Check if clobbered
+        if result.reg in ctx.clobbered:
+          error("Access to variable '" & name & "' in register " & $result.reg & " which was clobbered", n)
+        
+      result.typ = sym.typ
+      inc n
+    elif sym != nil and sym.kind == skLabel:
+      result.reg = RAX
+      result.label = LabelId(sym.offset)
+      result.typ = TypeUInt64
+      inc n
+    elif sym != nil and sym.kind == skRodata:
+      result.reg = RAX
+      result.label = LabelId(sym.offset)
+      result.typ = TypeUInt64 # Address of rodata
+      inc n
+    else:
+      error("Unknown or invalid symbol: " & name, n)
+  else:
+    error("Unexpected operand kind", n)
+
+proc parseDest(n: var Cursor; ctx: var GenContext): Operand =
+  if n.kind == ParLe and rawTagIsNifasmReg(n.tag):
+    result.reg = parseRegister(n)
+    result.typ = TypeInt64
+  elif n.kind == Symbol:
+    let name = getSym(n)
+    let sym = ctx.scope.lookup(name)
+    if sym != nil and sym.kind == skVar:
+       if sym.onStack:
+         result.isMem = true
+         result.mem = MemoryOperand(base: RBP, displacement: int32(sym.offset))
+         result.typ = sym.typ
+       elif sym.reg != InvalidTagId:
+         result.reg = case sym.reg
+            of RaxTagId, R0TagId: RAX
+            of RcxTagId, R2TagId: RCX
+            of RdxTagId, R3TagId: RDX
+            of RbxTagId, R1TagId: RBX
+            of RspTagId, R7TagId: RSP
+            of RbpTagId, R6TagId: RBP
+            of RsiTagId, R4TagId: RSI
+            of RdiTagId, R5TagId: RDI
+            of R8TagId: R8
+            of R9TagId: R9
+            of R10TagId: R10
+            of R11TagId: R11
+            of R12TagId: R12
+            of R13TagId: R13
+            of R14TagId: R14
+            of R15TagId: R15
+            else: RAX
+         result.typ = sym.typ
+         # Writing to a register makes it valid (unclobbered)
+         ctx.clobbered.excl(result.reg)
+       else:
+         error("Variable has no location", n)
+       inc n
+    else:
+       error("Expected variable or register as destination", n)
+  else:
+    error("Expected destination", n)
+
+proc checkType(want, got: Type; n: Cursor) =
+  if not compatible(want, got):
+    typeError(want, got, n)
+
+proc genInst(n: var Cursor; ctx: var GenContext) =
+  if n.kind != ParLe: error("Expected instruction", n)
+  let tag = n.tag
+  let start = n
+  
+  if tag == CallTagId:
+    # (call target (mov arg val) ...)
+    inc n
+    if n.kind != Symbol: error("Expected proc symbol", n)
+    let name = getSym(n)
+    let sym = ctx.scope.lookup(name)
+    if sym == nil or sym.kind != skProc: error("Unknown proc: " & name, n)
+    inc n
+    
+    # Parse arguments
+    var args: Table[string, Operand]
+    while n.kind == ParLe:
+      if n.tag == MovTagId:
+        inc n # mov
+        if n.kind != Symbol: error("Expected argument name", n)
+        let argName = getSym(n)
+        inc n
+        let val = parseOperand(n, ctx)
+        args[argName] = val
+        if n.kind != ParRi: error("Expected ) after argument", n)
+        inc n
+      else:
+        error("Expected (mov arg val) in call", n)
+        
+    # Validate arguments against signature
+    let sig = sym.sig
+    for param in sig.params:
+      if param.name notin args:
+        error("Missing argument: " & param.name, n)
+      let arg = args[param.name]
+      checkType(param.typ, arg.typ, start)
+      
+      var paramReg = RAX # Default
+      if param.onStack:
+        # Argument is on stack.
+        # We need to push or move to stack slot?
+        # nifasm is low level. Caller prepares arguments.
+        # If param is on stack, it is at [RSP + X] relative to caller?
+        # Wait, caller pushes args.
+        # So we need `push arg`.
+        # But nifasm uses `mov` syntax?
+        # If signature says (param :x (s) ...), call uses (mov :x val).
+        # We should emit `push val`?
+        # Or `mov [rsp+offset], val` (if we reserved space).
+        # Standard convention: PUSH args.
+        # But nifasm doesn't have PUSH in CallTagId logic.
+        # The order matters for PUSH.
+        # We iterate params.
+        # If we push, we must do it in reverse order (for C convention)?
+        # Or correct order?
+        # System V: stack args are pushed right-to-left.
+        # We have named args. We need to sort them or process in signature order?
+        # Signature order is likely declaration order.
+        # If we process in order, we might need to adjust.
+        # Let's assume we emit `mov` to register for reg params.
+        # For stack params, we should emit `push`?
+        # But `emitCall` does not handle pushing.
+        # If we need to push, we should do it.
+        # For now, let's error on stack params or implement push.
+        # x86 module needs emitPush.
+        error("Stack parameters not yet supported in call generation", n)
+      else:
+        case param.reg
+        of RaxTagId, R0TagId: paramReg = RAX
+        of RdiTagId, R5TagId: paramReg = RDI
+        of RsiTagId, R4TagId: paramReg = RSI
+        of RdxTagId, R3TagId: paramReg = RDX
+        of RcxTagId, R2TagId: paramReg = RCX
+        of R8TagId: paramReg = R8
+        of R9TagId: paramReg = R9
+        else: discard 
+        
+        if arg.isSsize:
+           ctx.buf.emitMovImmToReg32(paramReg, 0)
+           ctx.ssizePatches.add(ctx.buf.data.len - 4)
+        elif arg.isImm:
+          ctx.buf.emitMovImmToReg(paramReg, arg.immVal)
+        elif arg.isMem:
+          ctx.buf.emitMov(paramReg, arg.mem)
+        elif arg.reg != paramReg:
+          ctx.buf.emitMov(paramReg, arg.reg)
+        
+    # Clobber registers
+    ctx.clobbered.incl(sig.clobbers)
+    
+    var labId: LabelId
+    if sym.offset == -1:
+       labId = ctx.buf.createLabel()
+       sym.offset = int(labId)
+    else:
+       labId = LabelId(sym.offset)
+       
+    ctx.buf.emitCall(labId)
+    
+    if n.kind != ParRi: error("Expected ) after call", n)
+    inc n
+    return
+
+  if tag == IteTagId:
+    inc n
+    if n.kind != ParLe: error("Expected condition", n)
+    let condTag = n.tag
+    inc n
+    if n.kind != ParRi: error("Expected ) after cond", n)
+    inc n
+    
+    let lElse = ctx.buf.createLabel()
+    let lEnd = ctx.buf.createLabel()
+    
+    # Save clobbered state
+    let oldClobbered = ctx.clobbered
+    
+    case condTag
+    of OfTagId: ctx.buf.emitJno(lElse)
+    of NoTagId: ctx.buf.emitJo(lElse)
+    of ZfTagId: ctx.buf.emitJne(lElse)
+    of NzTagId: ctx.buf.emitJe(lElse)
+    of SfTagId: ctx.buf.emitJns(lElse)
+    of NsTagId: ctx.buf.emitJs(lElse)
+    of CfTagId: ctx.buf.emitJae(lElse)
+    of NcTagId: ctx.buf.emitJb(lElse)
+    of PfTagId: ctx.buf.emitJnp(lElse)
+    of NpTagId: ctx.buf.emitJp(lElse)
+    else: error("Unsupported condition: " & $condTag, n)
+    
+    genStmt(n, ctx) # Then block
+    # Clobbered state propagates?
+    # Control flow merge: union of clobbered sets?
+    # If a register is clobbered in THEN but not ELSE, it is clobbered after? Yes.
+    let thenClobbered = ctx.clobbered
+    
+    ctx.buf.emitJmp(lEnd)
+    
+    ctx.clobbered = oldClobbered # Reset for Else
+    ctx.buf.defineLabel(lElse)
+    genStmt(n, ctx) # Else block
+    let elseClobbered = ctx.clobbered
+    
+    ctx.buf.defineLabel(lEnd)
+    
+    # Merge clobbered
+    ctx.clobbered = thenClobbered + elseClobbered
+    
+    if n.kind != ParRi: error("Expected ) after ite", n)
+    inc n
+    return
+
+  if tag == LoopTagId:
+    inc n
+    
+    # Pre-loop
+    genStmt(n, ctx)
+    let lStart = ctx.buf.createLabel()
+    let lEnd = ctx.buf.createLabel()
+    
+    ctx.buf.defineLabel(lStart)
+    
+    if n.kind != ParLe: error("Expected condition", n)
+    let condTag = n.tag
+    inc n
+    if n.kind != ParRi: error("Expected ) after cond", n)
+    inc n
+    
+    case condTag
+    of ZfTagId: ctx.buf.emitJne(lEnd)
+    of NzTagId: ctx.buf.emitJe(lEnd)
+    else: error("Unsupported loop condition: " & $condTag, n)
+    
+    # Body
+    genStmt(n, ctx)
+    ctx.buf.emitJmp(lStart)
+    ctx.buf.defineLabel(lEnd)
+    
+    # Loop body clobbers propagate
+    # But we might execute loop 0 times?
+    # If it's a while loop check at start (which this seems to be? No, structure is (loop pre cond post)?)
+    # "As in NJVL... (loop (stmts) (cond) (stmts))"
+    # It's a do-while or mid-test loop.
+    # If we execute the body, clobbers happen.
+    # If we skip, they don't?
+    # "All control flow variables are always virtual... The first implementations... do not check if these jumps would skip useful instructions"
+    # For clobber tracking, we should assume body MIGHT run.
+    # So union with pre-loop state?
+    # But `ctx.clobbered` accumulates.
+    # So whatever happened in body is added.
+    
+    if n.kind != ParRi: error("Expected ) after loop", n)
+    inc n
+    return
+
+  if tag == VarTagId:
+    inc n
+    if n.kind != SymbolDef: error("Expected var name", n)
+    let name = getSym(n)
+    inc n
+    var reg = InvalidTagId
+    var onStack = false
+    if n.kind == ParLe:
+      let locTag = n.tag
+      if rawTagIsNifasmReg(locTag):
+        reg = locTag
+        inc n
+        if n.kind != ParRi: error("Expected )", n)
+        inc n
+      elif locTag == STagId:
+        onStack = true
+        inc n
+        if n.kind != ParRi: error("Expected )", n)
+        inc n
+      else:
+        inc n
+        if n.kind != ParRi: error("Expected )", n)
+        inc n
+    else:
+      error("Expected location", n)
+    let typ = parseType(n, ctx.scope)
+    
+    let sym = Symbol(name: name, kind: skVar, typ: typ)
+    if onStack:
+       sym.onStack = true
+       ctx.stackSize += alignedSize(typ)
+       sym.offset = -ctx.stackSize # RBP relative
+    else:
+       sym.reg = reg
+       
+    ctx.scope.define(sym)
+
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+    return
+
+  inc n
+  case tag
+  of MovTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    
+    if dest.isMem:
+       if op.isImm:
+         # x86 supports mov r/m64, imm32 (sign extended)
+         if op.immVal >= low(int32) and op.immVal <= high(int32):
+             # We need emitMov(MemoryOperand, int32)
+             # I haven't added it to x86.nim yet.
+             # But I can load to scratch? No, that clobbers.
+             # Assume immediate fits 32-bit or error?
+             # "MOV r/m64, imm32" (C7 /0)
+             # I'll assume it fits or implement `emitMov(mem, imm)`.
+             # Since I can't easily add to x86.nim right now without another round, 
+             # I'll raise error for mem, imm if not supported.
+             # Wait, I can use `emitMovImmToReg` if I have a scratch register? No.
+             error("Moving immediate to memory not fully supported yet (requires emitMovImmToMem)", n)
+         else:
+             error("Immediate too large for memory move (must fit in 32 bits)", n)
+       elif op.isSsize:
+         # Similar issue, ssize is immediate 0 (patched).
+         error("Moving ssize to memory not supported", n)
+       elif op.isMem:
+         error("Cannot move memory to memory", n)
+       else:
+         ctx.buf.emitMov(dest.mem, op.reg)
+    else:
+      # dest is reg
+      if op.isSsize:
+        ctx.buf.emitMovImmToReg32(dest.reg, 0)
+        ctx.ssizePatches.add(ctx.buf.data.len - 4)
+      elif op.isImm:
+        if op.immVal >= low(int32) and op.immVal <= high(int32):
+          ctx.buf.emitMovImmToReg32(dest.reg, int32(op.immVal))
+        else:
+          ctx.buf.emitMovImmToReg(dest.reg, op.immVal)
+      elif op.isMem:
+        ctx.buf.emitMov(dest.reg, op.mem)
+      else:
+        ctx.buf.emitMov(dest.reg, op.reg)
+        
+  of AddTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    
+    if dest.isMem:
+      if op.isImm:
+        # ADD m64, imm32
+        # Need emitAdd(MemoryOperand, int32)
+        error("Adding immediate to memory not supported yet", n)
+      elif op.isSsize:
+        error("Adding ssize to memory not supported", n)
+      elif op.isMem:
+        error("Cannot add memory to memory", n)
+      else:
+        ctx.buf.emitAdd(dest.mem, op.reg)
+    else:
+      if op.isSsize:
+        ctx.buf.emitAddImm(dest.reg, 0)
+        ctx.ssizePatches.add(ctx.buf.data.len - 4)
+      elif op.isImm:
+        ctx.buf.emitAddImm(dest.reg, int32(op.immVal))
+      elif op.isMem:
+        ctx.buf.emitAdd(dest.reg, op.mem)
+      else:
+        ctx.buf.emitAdd(dest.reg, op.reg)
+
+  of SubTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    
+    if dest.isMem:
+      if op.isImm:
+        error("Subtracting immediate from memory not supported yet", n)
+      elif op.isSsize:
+        error("Subtracting ssize from memory not supported", n)
+      elif op.isMem:
+        error("Cannot subtract memory from memory", n)
+      else:
+        ctx.buf.emitSub(dest.mem, op.reg)
+    else:
+      if op.isSsize:
+        ctx.buf.emitSubImm(dest.reg, 0)
+        ctx.ssizePatches.add(ctx.buf.data.len - 4)
+      elif op.isImm:
+        ctx.buf.emitSubImm(dest.reg, int32(op.immVal))
+      elif op.isMem:
+        ctx.buf.emitSub(dest.reg, op.mem)
+      else:
+        ctx.buf.emitSub(dest.reg, op.reg)
+
+  of SyscallTagId:
+    ctx.buf.emitSyscall()
+  of LeaTagId:
+    let dest = parseRegister(n) # LEA dest must be register
+    let op = parseOperand(n, ctx)
+    # LEA reg, label (rip-rel) or LEA reg, mem
+    if op.isMem:
+      ctx.buf.emitLea(dest, op.mem)
+    else:
+      ctx.buf.emitLea(dest, op.label)
+  # ... handle other instructions ...
+  else:
+    error("Unknown instruction: " & $tag, n)
+    
+  if n.kind != ParRi: error("Expected ) at end of instruction", n)
+  inc n
+
+proc pass2(n: var Cursor; ctx: var GenContext) =
+  var n = n
+  if n.kind == ParLe and n.tag == StmtsTagId:
+    inc n
+    while n.kind != ParRi:
+      if n.kind == ParLe:
+        case n.tag
+        of ProcTagId:
+          let oldScope = ctx.scope
+          ctx.scope = newScope(oldScope)
+          inc n
+          let name = getSym(n)
+          ctx.procName = name
+          
+          # Find/Create label for proc
+          let sym = oldScope.lookup(name)
+          if sym.offset == -1:
+             let lab = ctx.buf.createLabel()
+             sym.offset = int(lab)
+          ctx.buf.defineLabel(LabelId(sym.offset))
+          
+          # Initialize stack context
+          ctx.stackSize = 0
+          ctx.ssizePatches = @[]
+
+          # Add params to scope
+          var paramOffset = 16 # RBP + 16 (skip RBP, RetAddr)
+          for param in sym.sig.params:
+            if param.onStack:
+              ctx.scope.define(Symbol(name: param.name, kind: skParam, typ: param.typ, onStack: true, offset: paramOffset))
+              paramOffset += alignedSize(param.typ)
+            else:
+              ctx.scope.define(Symbol(name: param.name, kind: skParam, typ: param.typ, reg: param.reg))
+
+          inc n
+          while n.kind == ParLe and n.tag != BodyTagId:
+            skip n
+          if n.kind == ParLe and n.tag == BodyTagId:
+            inc n
+            while n.kind != ParRi:
+              genInst(n, ctx)
+            inc n
+          if n.kind != ParRi: error("Expected ) at end of proc", n)
+          inc n
+          
+          # Patch ssize
+          let alignedStackSize = (ctx.stackSize + 15) and not 15
+          for pos in ctx.ssizePatches:
+            # Write int32 at pos
+            if pos + 4 <= ctx.buf.data.len:
+              ctx.buf.data[pos] = byte(alignedStackSize and 0xFF)
+              ctx.buf.data[pos+1] = byte((alignedStackSize shr 8) and 0xFF)
+              ctx.buf.data[pos+2] = byte((alignedStackSize shr 16) and 0xFF)
+              ctx.buf.data[pos+3] = byte((alignedStackSize shr 24) and 0xFF)
+            else:
+              # Should not happen if patched correctly
+              discard
+
+          ctx.scope = oldScope
+        of RodataTagId:
+          inc n
+          let name = getSym(n)
+          let sym = ctx.scope.lookup(name)
+          let labId = ctx.buf.createLabel()
+          sym.offset = int(labId)
+          ctx.buf.defineLabel(labId)
+          inc n
+          let s = getStr(n)
+          for c in s: ctx.buf.add byte(c)
+          inc n
+          inc n
+        else:
+          if rawTagIsNifasmInst(n.tag) or n.tag == IteTagId or n.tag == LoopTagId:
+             genInst(n, ctx)
+          else:
+             skip n
+      else:
+        skip n
+    inc n
+
+proc writeElf(a: var GenContext; outfile: string) =
+  a.buf.finalize()
+  let code = a.buf.data
+  let baseAddr = 0x400000.uint64
+  let headersSize = 64 + 56
+  let entryAddr = baseAddr + headersSize.uint64
+  var ehdr = initHeader(entryAddr)
+  let fileSize = headersSize + code.len
+  let memSize = fileSize
+  var phdr = initPhdr(0, baseAddr, fileSize.uint64, memSize.uint64, PF_R or PF_X)
+  var f = newFileStream(outfile, fmWrite)
+  defer: f.close()
+  f.write(ehdr)
+  f.write(phdr)
+  if code.len > 0:
+    f.writeData(unsafeAddr code[0], code.len)
+  let perms = {fpUserExec, fpGroupExec, fpOthersExec, fpUserRead, fpUserWrite}
+  setFilePermissions(outfile, perms)
+
+proc assemble*(filename, outfile: string) =
+  var buf = parseFromFile(filename)
+  var n = beginRead(buf)
+  
+  var scope = newScope()
+  
+  var n1 = n
+  pass1(n1, scope)
+  
+  var ctx = GenContext(scope: scope, buf: initBuffer())
+  var n2 = n
+  pass2(n2, ctx)
+  
+  writeElf(ctx, outfile)
+
