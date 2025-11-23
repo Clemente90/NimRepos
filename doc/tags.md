@@ -127,6 +127,8 @@
 | `(ite ...)`            | NifasmInst                  | if-then-else structure |
 | `(loop ...)`           | NifasmInst                  | loop structure |
 | `(stmts ...)`          | NifasmInst                  | statement block |
+| `(cfvar D)`            | NifasmDecl                  | control flow variable declaration |
+| `(jtrue ...)`          | NifasmInst                  | set control flow variable(s) to true |
 | `(dot B F)`            | NifasmExpr                  | field access |
 | `(at B I)`             | NifasmExpr                  | array index |
 | `(mem ...)`            | NifasmExpr                  | memory reference |

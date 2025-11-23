@@ -114,6 +114,7 @@ type
     IteI = (ord(IteTagId), "ite")  ## if-then-else structure
     LoopI = (ord(LoopTagId), "loop")  ## loop structure
     StmtsI = (ord(StmtsTagId), "stmts")  ## statement block
+    JtrueI = (ord(JtrueTagId), "jtrue")  ## set control flow variable(s) to true
     KillI = (ord(KillTagId), "kill")  ## kill variable
     LockI = (ord(LockTagId), "lock")  ## atomic lock prefix
     XchgI = (ord(XchgTagId), "xchg")  ## atomic exchange
@@ -132,7 +133,7 @@ type
     PrefetchntaI = (ord(PrefetchntaTagId), "prefetchnta")  ## prefetch non-temporal
 
 proc rawTagIsNifasmInst*(raw: TagEnum): bool {.inline.} =
-  raw in {MovTagId, LeaTagId, MovapdTagId, MovsdTagId, AddTagId, SubTagId, MulTagId, ImulTagId, DivTagId, IdivTagId, AddsdTagId, SubsdTagId, MulsdTagId, DivsdTagId, AndTagId, OrTagId, XorTagId, ShlTagId, ShrTagId, SalTagId, SarTagId, IncTagId, DecTagId, NegTagId, NotTagId, CmpTagId, TestTagId, SeteTagId, SetzTagId, SetneTagId, SetnzTagId, SetaTagId, SetnbeTagId, SetaeTagId, SetnbTagId, SetncTagId, SetbTagId, SetnaeTagId, SetcTagId, SetbeTagId, SetnaTagId, SetgTagId, SetnleTagId, SetgeTagId, SetnlTagId, SetlTagId, SetngeTagId, SetleTagId, SetngTagId, SetoTagId, SetsTagId, SetpTagId, CmoveTagId, CmovzTagId, CmovneTagId, CmovnzTagId, CmovaTagId, CmovnbeTagId, CmovaeTagId, CmovnbTagId, CmovncTagId, CmovbTagId, CmovnaeTagId, CmovcTagId, CmovbeTagId, CmovnaTagId, CmovgTagId, CmovnleTagId, CmovgeTagId, CmovnlTagId, CmovlTagId, CmovngeTagId, CmovleTagId, CmovngTagId, CmovoTagId, CmovnoTagId, CmovsTagId, CmovnsTagId, CmovpTagId, CmovnpTagId, CmovpeTagId, CmovpoTagId, JmpTagId, JeTagId, JzTagId, JneTagId, JnzTagId, JgTagId, JngTagId, JgeTagId, JngeTagId, JaTagId, JnaTagId, JaeTagId, JnaeTagId, JlTagId, JleTagId, JbTagId, JbeTagId, CallTagId, RetTagId, PushTagId, PopTagId, NopTagId, SyscallTagId, LabTagId, IteTagId, LoopTagId, StmtsTagId, KillTagId, LockTagId, XchgTagId, CmpxchgTagId, XaddTagId, Cmpxchg8bTagId, MfenceTagId, SfenceTagId, LfenceTagId, PauseTagId, ClflushTagId, ClflushoptTagId, Prefetcht0TagId, Prefetcht1TagId, Prefetcht2TagId, PrefetchntaTagId}
+  raw in {MovTagId, LeaTagId, MovapdTagId, MovsdTagId, AddTagId, SubTagId, MulTagId, ImulTagId, DivTagId, IdivTagId, AddsdTagId, SubsdTagId, MulsdTagId, DivsdTagId, AndTagId, OrTagId, XorTagId, ShlTagId, ShrTagId, SalTagId, SarTagId, IncTagId, DecTagId, NegTagId, NotTagId, CmpTagId, TestTagId, SeteTagId, SetzTagId, SetneTagId, SetnzTagId, SetaTagId, SetnbeTagId, SetaeTagId, SetnbTagId, SetncTagId, SetbTagId, SetnaeTagId, SetcTagId, SetbeTagId, SetnaTagId, SetgTagId, SetnleTagId, SetgeTagId, SetnlTagId, SetlTagId, SetngeTagId, SetleTagId, SetngTagId, SetoTagId, SetsTagId, SetpTagId, CmoveTagId, CmovzTagId, CmovneTagId, CmovnzTagId, CmovaTagId, CmovnbeTagId, CmovaeTagId, CmovnbTagId, CmovncTagId, CmovbTagId, CmovnaeTagId, CmovcTagId, CmovbeTagId, CmovnaTagId, CmovgTagId, CmovnleTagId, CmovgeTagId, CmovnlTagId, CmovlTagId, CmovngeTagId, CmovleTagId, CmovngTagId, CmovoTagId, CmovnoTagId, CmovsTagId, CmovnsTagId, CmovpTagId, CmovnpTagId, CmovpeTagId, CmovpoTagId, JmpTagId, JeTagId, JzTagId, JneTagId, JnzTagId, JgTagId, JngTagId, JgeTagId, JngeTagId, JaTagId, JnaTagId, JaeTagId, JnaeTagId, JlTagId, JleTagId, JbTagId, JbeTagId, CallTagId, RetTagId, PushTagId, PopTagId, NopTagId, SyscallTagId, LabTagId, IteTagId, LoopTagId, StmtsTagId, JtrueTagId, KillTagId, LockTagId, XchgTagId, CmpxchgTagId, XaddTagId, Cmpxchg8bTagId, MfenceTagId, SfenceTagId, LfenceTagId, PauseTagId, ClflushTagId, ClflushoptTagId, Prefetcht0TagId, Prefetcht1TagId, Prefetcht2TagId, PrefetchntaTagId}
 
 type
   NifasmType* = enum
@@ -160,12 +161,13 @@ type
     ResultD = (ord(ResultTagId), "result")  ## result value declaration
     ClobberD = (ord(ClobberTagId), "clobber")  ## clobbered registers list
     VarD = (ord(VarTagId), "var")  ## variable declaration
+    CfvarD = (ord(CfvarTagId), "cfvar")  ## control flow variable declaration
     RodataD = (ord(RodataTagId), "rodata")  ## read-only data (string/bytes)
     GvarD = (ord(GvarTagId), "gvar")  ## global variable
     TvarD = (ord(TvarTagId), "tvar")  ## thread local variable
 
 proc rawTagIsNifasmDecl*(raw: TagEnum): bool {.inline.} =
-  raw in {TypeTagId, ProcTagId, ParamsTagId, ParamTagId, ResultTagId, ClobberTagId, VarTagId, RodataTagId, GvarTagId, TvarTagId}
+  raw in {TypeTagId, ProcTagId, ParamsTagId, ParamTagId, ResultTagId, ClobberTagId, VarTagId, CfvarTagId, RodataTagId, GvarTagId, TvarTagId}
 
 type
   NifasmExpr* = enum

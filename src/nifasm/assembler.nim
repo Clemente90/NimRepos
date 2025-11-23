@@ -651,30 +651,53 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
 
   if tag == IteTagId:
     inc n
-    if n.kind != ParLe: error("Expected condition", n)
-    let condTag = n.tag
-    inc n
-    if n.kind != ParRi: error("Expected ) after cond", n)
-    inc n
     
+    # Check if condition is a cfvar (symbol) or a hardware flag (parens)
     let lElse = ctx.buf.createLabel()
     let lEnd = ctx.buf.createLabel()
     
     # Save clobbered state
     let oldClobbered = ctx.clobbered
     
-    case condTag
-    of OfTagId: ctx.buf.emitJno(lElse)
-    of NoTagId: ctx.buf.emitJo(lElse)
-    of ZfTagId: ctx.buf.emitJne(lElse)
-    of NzTagId: ctx.buf.emitJe(lElse)
-    of SfTagId: ctx.buf.emitJns(lElse)
-    of NsTagId: ctx.buf.emitJs(lElse)
-    of CfTagId: ctx.buf.emitJae(lElse)
-    of NcTagId: ctx.buf.emitJb(lElse)
-    of PfTagId: ctx.buf.emitJnp(lElse)
-    of NpTagId: ctx.buf.emitJp(lElse)
-    else: error("Unsupported condition: " & $condTag, n)
+    if n.kind == Symbol:
+      # Control flow variable: (ite cfvar ...)
+      let name = getSym(n)
+      let sym = ctx.scope.lookup(name)
+      if sym == nil or sym.kind != skCfvar: error("Expected cfvar in ite condition: " & name, n)
+      inc n
+      
+      # When using a cfvar in ite, we don't emit any jump here.
+      # The cfvar's label should be defined at the start of the "then" branch.
+      # If jtrue was called, it jumped directly to the "then" branch.
+      # If jtrue was NOT called, execution falls through to the "else" branch.
+      
+      # We need to emit an unconditional jump to else before the then branch
+      ctx.buf.emitJmp(lElse)
+      
+      # Define the cfvar's label here (start of then branch)
+      ctx.buf.defineLabel(LabelId(sym.offset))
+      
+    elif n.kind == ParLe:
+      # Hardware flag: (ite (flag) ...)
+      let condTag = n.tag
+      inc n
+      if n.kind != ParRi: error("Expected ) after cond", n)
+      inc n
+      
+      case condTag
+      of OfTagId: ctx.buf.emitJno(lElse)
+      of NoTagId: ctx.buf.emitJo(lElse)
+      of ZfTagId: ctx.buf.emitJne(lElse)
+      of NzTagId: ctx.buf.emitJe(lElse)
+      of SfTagId: ctx.buf.emitJns(lElse)
+      of NsTagId: ctx.buf.emitJs(lElse)
+      of CfTagId: ctx.buf.emitJae(lElse)
+      of NcTagId: ctx.buf.emitJb(lElse)
+      of PfTagId: ctx.buf.emitJnp(lElse)
+      of NpTagId: ctx.buf.emitJp(lElse)
+      else: error("Unsupported condition: " & $condTag, n)
+    else:
+      error("Expected cfvar or flag condition in ite", n)
     
     genStmt(n, ctx) # Then block
     # Clobbered state propagates?
@@ -741,6 +764,23 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     inc n
     return
 
+  if tag == CfvarTagId:
+    # (cfvar :name.0)
+    inc n
+    if n.kind != SymbolDef: error("Expected cfvar name", n)
+    let name = getSym(n)
+    inc n
+    
+    # Control flow variables are always virtual (bool type, never materialized)
+    # We create a label for when this cfvar becomes "true"
+    let cfvarLabel = ctx.buf.createLabel()
+    let sym = Symbol(name: name, kind: skCfvar, typ: TypeBool, offset: int(cfvarLabel))
+    ctx.scope.define(sym)
+    
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+    return
+
   if tag == VarTagId:
     inc n
     if n.kind != SymbolDef: error("Expected var name", n)
@@ -777,6 +817,36 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
        
     ctx.scope.define(sym)
 
+    if n.kind != ParRi: error("Expected )", n)
+    inc n
+    return
+
+  if tag == JtrueTagId:
+    # (jtrue cfvar1.0 cfvar2.0 ...)
+    # Set control flow variable(s) to true by emitting an unconditional jump
+    # The jump targets are stored in the cfvar symbols
+    inc n
+    var jumpTarget: LabelId
+    var firstCfvar = true
+    
+    while n.kind == Symbol:
+      let name = getSym(n)
+      let sym = ctx.scope.lookup(name)
+      if sym == nil: error("Unknown cfvar: " & name, n)
+      if sym.kind != skCfvar: error("Symbol is not a cfvar: " & name, n)
+      
+      if firstCfvar:
+        jumpTarget = LabelId(sym.offset)
+        firstCfvar = false
+      # For multiple cfvars, they all jump to the same place (first one's target)
+      # This matches the semantics where all are set to true together
+      inc n
+    
+    if firstCfvar: error("jtrue requires at least one cfvar", start)
+    
+    # Emit unconditional jump to the cfvar's target label
+    ctx.buf.emitJmp(jumpTarget)
+    
     if n.kind != ParRi: error("Expected )", n)
     inc n
     return
