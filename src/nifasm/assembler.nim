@@ -550,6 +550,52 @@ proc checkType(want, got: Type; n: Cursor) =
   if not compatible(want, got):
     typeError(want, got, n)
 
+proc isNumericType(t: Type): bool =
+  ## Check if type is numeric (int, uint, float)
+  t.kind in {TypeKind.IntT, TypeKind.UIntT, TypeKind.FloatT}
+
+proc isIntegerType(t: Type): bool =
+  ## Check if type is an integer type (int or uint)
+  t.kind in {TypeKind.IntT, TypeKind.UIntT}
+
+proc isFloatType(t: Type): bool =
+  ## Check if type is a floating point type
+  t.kind == TypeKind.FloatT
+
+proc isPointerType(t: Type): bool =
+  ## Check if type is a pointer type (ptr or aptr)
+  t.kind in {TypeKind.PtrT, TypeKind.AptrT}
+
+proc canDoIntegerArithmetic(t: Type): bool =
+  ## Check if type supports integer arithmetic operations (add, sub)
+  ## Includes integer types and array pointers (for pointer arithmetic)
+  t.kind in {TypeKind.IntT, TypeKind.UIntT, TypeKind.AptrT}
+
+proc canDoBitwiseOps(t: Type): bool =
+  ## Check if type supports bitwise operations
+  t.kind in {TypeKind.IntT, TypeKind.UIntT}
+
+proc checkIntegerArithmetic(t: Type; op: string; n: Cursor) =
+  if not canDoIntegerArithmetic(t):
+    error("Operation '" & op & "' requires integer or pointer type, got " & $t, n)
+
+proc checkIntegerType(t: Type; op: string; n: Cursor) =
+  if not isIntegerType(t):
+    error("Operation '" & op & "' requires integer type, got " & $t, n)
+
+proc checkFloatType(t: Type; op: string; n: Cursor) =
+  if not isFloatType(t):
+    error("Operation '" & op & "' requires floating point type, got " & $t, n)
+
+proc checkBitwiseType(t: Type; op: string; n: Cursor) =
+  if not canDoBitwiseOps(t):
+    error("Operation '" & op & "' requires integer type, got " & $t, n)
+
+proc checkCompatibleTypes(t1, t2: Type; op: string; n: Cursor) =
+  ## Check that two operands have compatible types for an operation
+  if not compatible(t1, t2):
+    error("Operation '" & op & "' requires compatible types, got " & $t1 & " and " & $t2, n)
+
 proc genInst(n: var Cursor; ctx: var GenContext) =
   if n.kind != ParLe: error("Expected instruction", n)
   let tag = n.tag
@@ -931,6 +977,11 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
     
+    # Type check: add works on integers and pointers
+    checkIntegerArithmetic(dest.typ, "add", start)
+    checkIntegerArithmetic(op.typ, "add", start)
+    checkCompatibleTypes(dest.typ, op.typ, "add", start)
+    
     if dest.isMem:
       if op.isImm:
         # ADD m64, imm32
@@ -957,6 +1008,11 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
     
+    # Type check: sub works on integers and pointers
+    checkIntegerArithmetic(dest.typ, "sub", start)
+    checkIntegerArithmetic(op.typ, "sub", start)
+    checkCompatibleTypes(dest.typ, op.typ, "sub", start)
+    
     if dest.isMem:
       if op.isImm:
         error("Subtracting immediate from memory not supported yet", n)
@@ -979,6 +1035,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
 
   of MulTagId:
     let op = parseOperand(n, ctx)
+    checkIntegerType(op.typ, "mul", start)
     if op.isImm: error("MUL immediate not supported", n)
     if op.isMem: error("MUL memory not supported yet", n) # Need emitMul(mem)
     ctx.buf.emitMul(op.reg)
@@ -988,6 +1045,8 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     # doc says (imul D S)
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkIntegerType(dest.typ, "imul", start)
+    checkIntegerType(op.typ, "imul", start)
     if dest.isMem: error("IMUL destination cannot be memory", n)
     if op.isImm:
       ctx.buf.emitImulImm(dest.reg, int32(op.immVal))
@@ -1005,12 +1064,13 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     inc n
     
     inc n # (rax)
-    if n.kind != ParLe or n.tag != RaxTagId: error("Expected (rax) for div", n)
+    if n.kind != ParLe or n.tag != RaxTagId: error("Expected (rax) for idiv", n)
     inc n
     if n.kind != ParRi: error("Expected )", n)
     inc n
     
     let op = parseOperand(n, ctx)
+    checkIntegerType(op.typ, "div", start)
     if op.isImm: error("DIV immediate not supported", n)
     if op.isMem: error("DIV memory not supported yet", n)
     ctx.buf.emitDiv(op.reg)
@@ -1030,6 +1090,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     inc n
     
     let op = parseOperand(n, ctx)
+    checkIntegerType(op.typ, "idiv", start)
     if op.isImm: error("IDIV immediate not supported", n)
     if op.isMem: error("IDIV memory not supported yet", n)
     ctx.buf.emitIdiv(op.reg)
@@ -1038,6 +1099,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of AndTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkBitwiseType(dest.typ, "and", start)
+    checkBitwiseType(op.typ, "and", start)
+    checkCompatibleTypes(dest.typ, op.typ, "and", start)
     if dest.isMem:
       error("AND to memory not supported yet", n)
     else:
@@ -1051,6 +1115,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of OrTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkBitwiseType(dest.typ, "or", start)
+    checkBitwiseType(op.typ, "or", start)
+    checkCompatibleTypes(dest.typ, op.typ, "or", start)
     if dest.isMem:
       error("OR to memory not supported yet", n)
     else:
@@ -1064,6 +1131,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of XorTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkBitwiseType(dest.typ, "xor", start)
+    checkBitwiseType(op.typ, "xor", start)
+    checkCompatibleTypes(dest.typ, op.typ, "xor", start)
     if dest.isMem:
       error("XOR to memory not supported yet", n)
     else:
@@ -1077,6 +1147,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of ShlTagId, SalTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkBitwiseType(dest.typ, "shl", start)
     if dest.isMem: error("Shift destination cannot be memory", n)
     if op.isImm:
       ctx.buf.emitShl(dest.reg, int(op.immVal))
@@ -1092,6 +1163,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of ShrTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkBitwiseType(dest.typ, "shr", start)
     if dest.isMem: error("Shift destination cannot be memory", n)
     if op.isImm:
       ctx.buf.emitShr(dest.reg, int(op.immVal))
@@ -1101,6 +1173,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of SarTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkBitwiseType(dest.typ, "sar", start)
     if dest.isMem: error("Shift destination cannot be memory", n)
     if op.isImm:
       ctx.buf.emitSar(dest.reg, int(op.immVal))
@@ -1110,21 +1183,25 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   # Unary
   of IncTagId:
     let op = parseDest(n, ctx) # Dest/Src same
+    checkIntegerArithmetic(op.typ, "inc", start)
     if op.isMem: error("INC memory not supported yet", n)
     ctx.buf.emitInc(op.reg)
 
   of DecTagId:
     let op = parseDest(n, ctx)
+    checkIntegerArithmetic(op.typ, "dec", start)
     if op.isMem: error("DEC memory not supported yet", n)
     ctx.buf.emitDec(op.reg)
 
   of NegTagId:
     let op = parseDest(n, ctx)
+    checkIntegerArithmetic(op.typ, "neg", start)
     if op.isMem: error("NEG memory not supported yet", n)
     ctx.buf.emitNeg(op.reg)
 
   of NotTagId:
     let op = parseDest(n, ctx)
+    checkBitwiseType(op.typ, "not", start)
     if op.isMem: error("NOT memory not supported yet", n)
     ctx.buf.emitNot(op.reg)
 
@@ -1132,6 +1209,10 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of CmpTagId:
     let dest = parseDest(n, ctx) # Actually just operand 1
     let op = parseOperand(n, ctx)
+    # Comparisons work on integers and pointers
+    checkIntegerArithmetic(dest.typ, "cmp", start)
+    checkIntegerArithmetic(op.typ, "cmp", start)
+    checkCompatibleTypes(dest.typ, op.typ, "cmp", start)
     if dest.isMem:
       if op.isImm:
         # CMP m64, imm32
@@ -1157,6 +1238,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of TestTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkBitwiseType(dest.typ, "test", start)
+    checkBitwiseType(op.typ, "test", start)
+    checkCompatibleTypes(dest.typ, op.typ, "test", start)
     if dest.isMem:
       error("TEST memory not supported yet", n)
     else:
@@ -1510,7 +1594,32 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     # Let's assume we add XMM support to parseRegister or use a variant.
     error("MOVSD not fully supported yet (needs XMM register parsing)", n)
 
-  of AddsdTagId, SubsdTagId, MulsdTagId, DivsdTagId:
+  of AddsdTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    checkFloatType(dest.typ, "addsd", start)
+    checkFloatType(op.typ, "addsd", start)
+    error("Scalar double precision arithmetic not fully supported yet", n)
+  
+  of SubsdTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    checkFloatType(dest.typ, "subsd", start)
+    checkFloatType(op.typ, "subsd", start)
+    error("Scalar double precision arithmetic not fully supported yet", n)
+  
+  of MulsdTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    checkFloatType(dest.typ, "mulsd", start)
+    checkFloatType(op.typ, "mulsd", start)
+    error("Scalar double precision arithmetic not fully supported yet", n)
+  
+  of DivsdTagId:
+    let dest = parseDest(n, ctx)
+    let op = parseOperand(n, ctx)
+    checkFloatType(dest.typ, "divsd", start)
+    checkFloatType(op.typ, "divsd", start)
     error("Scalar double precision arithmetic not fully supported yet", n)
 
   of LockTagId:
@@ -1521,6 +1630,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     of AddTagId:
       let dest = parseDest(n, ctx)
       let op = parseOperand(n, ctx)
+      checkIntegerArithmetic(dest.typ, "lock add", start)
+      checkIntegerArithmetic(op.typ, "lock add", start)
+      checkCompatibleTypes(dest.typ, op.typ, "lock add", start)
       if not dest.isMem: error("Atomic ADD requires memory destination", n)
       if op.isImm: error("Atomic ADD immediate not supported yet", n)
       if op.isMem: error("Atomic ADD memory source not supported", n)
@@ -1529,6 +1641,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     of SubTagId:
       let dest = parseDest(n, ctx)
       let op = parseOperand(n, ctx)
+      checkIntegerArithmetic(dest.typ, "lock sub", start)
+      checkIntegerArithmetic(op.typ, "lock sub", start)
+      checkCompatibleTypes(dest.typ, op.typ, "lock sub", start)
       if not dest.isMem: error("Atomic SUB requires memory destination", n)
       if op.isImm: error("Atomic SUB immediate not supported yet", n)
       if op.isMem: error("Atomic SUB memory source not supported", n)
@@ -1537,6 +1652,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     of AndTagId:
       let dest = parseDest(n, ctx)
       let op = parseOperand(n, ctx)
+      checkBitwiseType(dest.typ, "lock and", start)
+      checkBitwiseType(op.typ, "lock and", start)
+      checkCompatibleTypes(dest.typ, op.typ, "lock and", start)
       if not dest.isMem: error("Atomic AND requires memory destination", n)
       if op.isImm: error("Atomic AND immediate not supported yet", n)
       if op.isMem: error("Atomic AND memory source not supported", n)
@@ -1545,6 +1663,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     of OrTagId:
       let dest = parseDest(n, ctx)
       let op = parseOperand(n, ctx)
+      checkBitwiseType(dest.typ, "lock or", start)
+      checkBitwiseType(op.typ, "lock or", start)
+      checkCompatibleTypes(dest.typ, op.typ, "lock or", start)
       if not dest.isMem: error("Atomic OR requires memory destination", n)
       if op.isImm: error("Atomic OR immediate not supported yet", n)
       if op.isMem: error("Atomic OR memory source not supported", n)
@@ -1553,6 +1674,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     of XorTagId:
       let dest = parseDest(n, ctx)
       let op = parseOperand(n, ctx)
+      checkBitwiseType(dest.typ, "lock xor", start)
+      checkBitwiseType(op.typ, "lock xor", start)
+      checkCompatibleTypes(dest.typ, op.typ, "lock xor", start)
       if not dest.isMem: error("Atomic XOR requires memory destination", n)
       if op.isImm: error("Atomic XOR immediate not supported yet", n)
       if op.isMem: error("Atomic XOR memory source not supported", n)
@@ -1560,21 +1684,25 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
       ctx.buf.emitXor(dest.mem, op.reg)
     of IncTagId:
       let dest = parseDest(n, ctx)
+      checkIntegerArithmetic(dest.typ, "lock inc", start)
       if not dest.isMem: error("Atomic INC requires memory destination", n)
       ctx.buf.emitLock()
       ctx.buf.emitInc(dest.mem)
     of DecTagId:
       let dest = parseDest(n, ctx)
+      checkIntegerArithmetic(dest.typ, "lock dec", start)
       if not dest.isMem: error("Atomic DEC requires memory destination", n)
       ctx.buf.emitLock()
       ctx.buf.emitDec(dest.mem)
     of NotTagId:
       let dest = parseDest(n, ctx)
+      checkBitwiseType(dest.typ, "lock not", start)
       if not dest.isMem: error("Atomic NOT requires memory destination", n)
       ctx.buf.emitLock()
       ctx.buf.emitNot(dest.mem)
     of NegTagId:
       let dest = parseDest(n, ctx)
+      checkIntegerArithmetic(dest.typ, "lock neg", start)
       if not dest.isMem: error("Atomic NEG requires memory destination", n)
       ctx.buf.emitLock()
       ctx.buf.emitNeg(dest.mem)
@@ -1588,6 +1716,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of XchgTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkIntegerType(dest.typ, "xchg", start)
+    checkIntegerType(op.typ, "xchg", start)
+    checkCompatibleTypes(dest.typ, op.typ, "xchg", start)
     if dest.isMem:
        if op.isImm: error("XCHG memory, immediate not supported", n)
        if op.isMem: error("XCHG memory, memory not supported", n)
@@ -1602,6 +1733,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of XaddTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkIntegerType(dest.typ, "xadd", start)
+    checkIntegerType(op.typ, "xadd", start)
+    checkCompatibleTypes(dest.typ, op.typ, "xadd", start)
     if dest.isMem:
        if op.isImm: error("XADD memory, immediate not supported", n)
        if op.isMem: error("XADD memory, memory not supported", n)
@@ -1614,6 +1748,9 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of CmpxchgTagId:
     let dest = parseDest(n, ctx)
     let op = parseOperand(n, ctx)
+    checkIntegerType(dest.typ, "cmpxchg", start)
+    checkIntegerType(op.typ, "cmpxchg", start)
+    checkCompatibleTypes(dest.typ, op.typ, "cmpxchg", start)
     if dest.isMem:
        if op.isImm: error("CMPXCHG memory, immediate not supported", n)
        if op.isMem: error("CMPXCHG memory, memory not supported", n)
