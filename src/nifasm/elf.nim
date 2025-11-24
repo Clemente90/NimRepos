@@ -34,6 +34,18 @@ type
     p_memsz*: Elf64_Xword
     p_align*: Elf64_Xword
 
+  Elf64_Shdr* = object
+    sh_name*: Elf64_Word
+    sh_type*: Elf64_Word
+    sh_flags*: Elf64_Xword
+    sh_addr*: Elf64_Addr
+    sh_offset*: Elf64_Off
+    sh_size*: Elf64_Xword
+    sh_link*: Elf64_Word
+    sh_info*: Elf64_Word
+    sh_addralign*: Elf64_Xword
+    sh_entsize*: Elf64_Xword
+
 const
   EI_MAG0 = 0
   EI_MAG1 = 1
@@ -44,24 +56,34 @@ const
   EI_VERSION = 6
   EI_OSABI = 7
   EI_ABIVERSION = 8
-  
+
   ELFMAG0 = 0x7f.byte
   ELFMAG1 = 'E'.byte
   ELFMAG2 = 'L'.byte
   ELFMAG3 = 'F'.byte
-  
+
   ELFCLASS64 = 2.byte
   ELFDATA2LSB = 1.byte
   EV_CURRENT = 1.byte
   ELFOSABI_SYSV = 0.byte # Or ELFOSABI_LINUX
-  
+
   ET_EXEC = 2.Elf64_Half
   EM_X86_64 = 62.Elf64_Half
-  
+
   PT_LOAD = 1.Elf64_Word
   PF_X* = 1.Elf64_Word
   PF_W* = 2.Elf64_Word
   PF_R* = 4.Elf64_Word
+
+  # Section types
+  SHT_NULL = 0.Elf64_Word
+  SHT_PROGBITS = 1.Elf64_Word
+  SHT_NOBITS = 8.Elf64_Word
+
+  # Section flags
+  SHF_WRITE = 1.Elf64_Xword
+  SHF_ALLOC = 2.Elf64_Xword
+  SHF_EXECINSTR = 4.Elf64_Xword
 
 proc initHeader*(entry: uint64): Elf64_Ehdr =
   result.e_ident[EI_MAG0] = ELFMAG0
@@ -73,7 +95,7 @@ proc initHeader*(entry: uint64): Elf64_Ehdr =
   result.e_ident[EI_VERSION] = EV_CURRENT
   result.e_ident[EI_OSABI] = ELFOSABI_SYSV
   result.e_ident[EI_ABIVERSION] = 0
-  
+
   result.e_type = ET_EXEC
   result.e_machine = EM_X86_64
   result.e_version = 1
@@ -97,4 +119,16 @@ proc initPhdr*(offset, vaddr, filesz, memsz: uint64; flags: uint32): Elf64_Phdr 
   result.p_filesz = filesz
   result.p_memsz = memsz
   result.p_align = 0x1000
+
+proc initShdr*(name, typ, flags, address, offset, size, link, info, addralign, entsize: uint64): Elf64_Shdr =
+  result.sh_name = name.Elf64_Word
+  result.sh_type = typ.Elf64_Word
+  result.sh_flags = flags.Elf64_Xword
+  result.sh_addr = address.Elf64_Addr
+  result.sh_offset = offset.Elf64_Off
+  result.sh_size = size.Elf64_Xword
+  result.sh_link = link.Elf64_Word
+  result.sh_info = info.Elf64_Word
+  result.sh_addralign = addralign.Elf64_Xword
+  result.sh_entsize = entsize.Elf64_Xword
 

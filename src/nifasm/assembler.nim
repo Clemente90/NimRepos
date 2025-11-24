@@ -303,13 +303,15 @@ proc pass1(n: var Cursor; scope: Scope) =
 type
   GenContext = object
     scope: Scope
-    buf: Buffer
+    buf: Buffer  # Code buffer (.text section)
+    bssBuf: Buffer  # BSS buffer (.bss section) for zero-initialized global variables
     procName: string
     inCall: bool
     clobbered: set[Register] # Registers clobbered in current flow
     slots: SlotManager
     ssizePatches: seq[int]
     tlsOffset: int  # Current TLS offset for thread-local variables
+    bssOffset: int  # Current offset in .bss section
 
   Operand = object
     reg: Register
@@ -2034,19 +2036,33 @@ proc pass2(n: var Cursor; ctx: var GenContext) =
           inc n
           inc n
         of GvarTagId:
+          # Global variable declaration - goes in .bss section (zero-initialized writable memory)
           inc n
           let name = getSym(n)
           let sym = ctx.scope.lookup(name)
-          let labId = ctx.buf.createLabel()
-          sym.offset = int(labId)
-          ctx.buf.defineLabel(labId)
+          if sym == nil: error("Global variable not found in scope: " & name, n)
           inc n
-          # Skip type
+          # Skip type (already parsed in pass1)
           skip n
-          # Allocate space for gvar in code section (for now)
-          # It should ideally be in .data or .bss
-          let size = alignedSize(sym.typ)
-          for i in 0..<size: ctx.buf.add 0
+
+          # Allocate space in .bss section
+          let size = slots.alignedSize(sym.typ)
+          # Align bssOffset to the type's alignment
+          let align = sizeOf(sym.typ)
+          if align > 1:
+            ctx.bssOffset = (ctx.bssOffset + align - 1) and not (align - 1)
+
+          # Create a label for the global variable address
+          let labId = ctx.bssBuf.createLabel()
+          sym.offset = int(labId)
+          ctx.bssBuf.defineLabel(labId)
+
+          # Store the actual offset for later use in relocations
+          # The offset will be used when generating code that references this variable
+          # For now, we just track it in sym.offset as the label ID
+          # The actual memory offset is ctx.bssOffset
+          ctx.bssOffset += size
+
           inc n # )
         of TvarTagId:
           # Thread local variable declaration
@@ -2076,20 +2092,58 @@ proc pass2(n: var Cursor; ctx: var GenContext) =
 
 proc writeElf(a: var GenContext; outfile: string) =
   a.buf.finalize()
+  a.bssBuf.finalize()
   let code = a.buf.data
   let baseAddr = 0x400000.uint64
-  let headersSize = 64 + 56
-  let entryAddr = baseAddr + headersSize.uint64
+  let headersSize = 64 + (56 * 2)  # ELF header + 2 program headers
+  let pageSize = 0x1000.uint64
+
+  # Calculate addresses and sizes
+  let textOffset = headersSize.uint64
+  let textVaddr = baseAddr + textOffset
+  let textSize = code.len.uint64
+  let textAlignedSize = (textSize + pageSize - 1) and not (pageSize - 1)
+
+  # .bss section comes after .text in memory
+  let bssVaddr = textVaddr + textAlignedSize
+  let bssSize = a.bssOffset.uint64
+  let bssAlignedSize = if bssSize > 0: ((bssSize + pageSize - 1) and not (pageSize - 1)) else: 0.uint64
+
+  let entryAddr = textVaddr
   var ehdr = initHeader(entryAddr)
-  let fileSize = headersSize + code.len
-  let memSize = fileSize
-  var phdr = initPhdr(0, baseAddr, fileSize.uint64, memSize.uint64, PF_R or PF_X)
+  ehdr.e_phnum = 2  # Two program headers: .text and .bss
+  ehdr.e_phoff = 64  # Program headers start after ELF header
+
+  # .text program header (executable, readable)
+  var textPhdr = initPhdr(textOffset, textVaddr, textSize, textAlignedSize, PF_R or PF_X)
+
+  # .bss program header (writable, readable, not executable)
+  # p_filesz = 0 because .bss is not stored in the file (zero-initialized)
+  # p_memsz = actual size needed in memory
+  var bssPhdr = initPhdr(0, bssVaddr, 0, bssAlignedSize, PF_R or PF_W)
+
   var f = newFileStream(outfile, fmWrite)
   defer: f.close()
+
+  # Write ELF header
   f.write(ehdr)
-  f.write(phdr)
+
+  # Write program headers
+  f.write(textPhdr)
+  f.write(bssPhdr)
+
+  # Write .text section (code)
   if code.len > 0:
     f.writeData(unsafeAddr code[0], code.len)
+    # Pad to page boundary
+    let padding = int(textAlignedSize - textSize)
+    if padding > 0:
+      var zeros = newSeq[byte](padding)
+      f.writeData(unsafeAddr zeros[0], padding)
+
+  # .bss section is not written to file (it's zero-initialized by the loader)
+  # The loader will allocate the memory and zero it
+
   let perms = {fpUserExec, fpGroupExec, fpOthersExec, fpUserRead, fpUserWrite}
   setFilePermissions(outfile, perms)
 
@@ -2102,7 +2156,7 @@ proc assemble*(filename, outfile: string) =
   var n1 = n
   pass1(n1, scope)
 
-  var ctx = GenContext(scope: scope, buf: initBuffer(), tlsOffset: 0)
+  var ctx = GenContext(scope: scope, buf: initBuffer(), bssBuf: initBuffer(), tlsOffset: 0, bssOffset: 0)
   var n2 = n
   pass2(n2, ctx)
 
