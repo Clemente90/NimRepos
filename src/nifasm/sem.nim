@@ -75,13 +75,30 @@ proc define*(s: Scope; sym: Symbol) =
 proc undefine*(s: Scope; name: string) =
   s.syms.del(name)
 
-proc sizeOf*(t: Type): int =
+proc asmAlignOf*(t: Type): int =
+  ## Returns the alignment requirement of a type in bytes
+  case t.kind
+  of ErrorT, VoidT: 1
+  of BoolT: 1
+  of IntT, UIntT, FloatT: 
+    let size = t.bits div 8
+    # Alignment is typically the size, but capped at 8 for x86-64
+    if size <= 8: size else: 8
+  of PtrT, AptrT: 8 # x86-64 pointer alignment
+  of ArrayT: asmAlignOf(t.elem)
+  of ObjectT, UnionT: t.align
+
+proc alignTo*(offset, alignment: int): int =
+  ## Align offset up to the next multiple of alignment
+  (offset + alignment - 1) and not (alignment - 1)
+
+proc asmSizeOf*(t: Type): int =
   case t.kind
   of ErrorT, VoidT: 0
   of BoolT: 1
   of IntT, UIntT, FloatT: t.bits div 8
   of PtrT, AptrT: 8 # x86-64
-  of ArrayT: t.len.int * sizeOf(t.elem)
+  of ArrayT: t.len.int * asmSizeOf(t.elem)
   of ObjectT, UnionT: t.size
 
 proc `$`*(t: Type): string =

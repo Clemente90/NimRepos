@@ -129,6 +129,7 @@ proc parseClobbers(n: var Cursor): set[Register]
 proc parseObjectBody(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
   var fields: seq[(string, Type)] = @[]
   var offset = 0
+  var maxAlign = 1  # Track maximum alignment requirement
   inc n
   while n.kind != ParRi:
     if n.kind == ParLe and n.tag == FldTagId:
@@ -138,14 +139,27 @@ proc parseObjectBody(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
       inc n
       let ftype = parseType(n, scope, ctx)
       fields.add (name, ftype)
-      let size = sizeOf(ftype)
-      offset += size
+      
+      # Align field to its natural alignment
+      let fieldAlign = asmAlignOf(ftype)
+      offset = alignTo(offset, fieldAlign)
+      
+      # Track maximum alignment for the struct
+      if fieldAlign > maxAlign:
+        maxAlign = fieldAlign
+      
+      # Move past this field
+      offset += asmSizeOf(ftype)
+      
       if n.kind != ParRi: error("Expected )", n)
       inc n
     else:
       error("Expected field definition", n)
   inc n
-  result = Type(kind: ObjectT, fields: fields, size: offset)
+  
+  # Round up total size to be a multiple of the struct's alignment
+  let finalSize = alignTo(offset, maxAlign)
+  result = Type(kind: ObjectT, fields: fields, size: finalSize, align: maxAlign)
 
 proc loadForeignModule(ctx: var GenContext; modname: string; scope: Scope; n: Cursor) =
   ## Load a foreign module and add its symbols to the scope
@@ -328,6 +342,7 @@ proc parseType(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
 proc parseUnionBody(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
   var fields: seq[(string, Type)] = @[]
   var maxSize = 0
+  var maxAlign = 1  # Track maximum alignment requirement
   inc n 
   while n.kind != ParRi:
     if n.kind == ParLe and n.tag == FldTagId:
@@ -337,16 +352,27 @@ proc parseUnionBody(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
       inc n
       let ftype = parseType(n, scope, ctx)
       fields.add (name, ftype)
-      let size = sizeOf(ftype)
+      
+      let size = asmSizeOf(ftype)
+      let fieldAlign = asmAlignOf(ftype)
+      
       # Union size is the maximum of all field sizes
       if size > maxSize:
         maxSize = size
+      
+      # Track maximum alignment
+      if fieldAlign > maxAlign:
+        maxAlign = fieldAlign
+      
       if n.kind != ParRi: error("Expected )", n)
       inc n
     else:
       error("Expected field definition", n)
   inc n
-  result = Type(kind: UnionT, fields: fields, size: maxSize)
+  
+  # Round up size to be a multiple of the union's alignment
+  let finalSize = alignTo(maxSize, maxAlign)
+  result = Type(kind: UnionT, fields: fields, size: finalSize, align: maxAlign)
 
 proc parseParams(n: var Cursor; scope: Scope; ctx: var GenContext): seq[Param] =
   # (params (param :name (reg) Type) ...)
@@ -657,12 +683,18 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
       var fieldOffset = 0
       var fieldType: Type = nil
       for (fname, ftype) in objType.fields:
+        # For unions, all fields are at offset 0
+        if objType.kind == TypeKind.ObjectT:
+          # Align to field's natural alignment
+          fieldOffset = alignTo(fieldOffset, asmAlignOf(ftype))
+        
         if fname == fieldName:
           fieldType = ftype
           break
-        # For unions, all fields are at offset 0; for objects, accumulate offsets
+        
+        # For objects, move past this field
         if objType.kind == TypeKind.ObjectT:
-          fieldOffset += sizeOf(ftype)
+          fieldOffset += asmSizeOf(ftype)
       
       if fieldType == nil:
         error("Field '" & fieldName & "' not found in " & $objType.kind, n)
@@ -708,7 +740,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
       # Check if index is immediate or register
       if indexOp.isImm:
         # Immediate index: compute offset directly
-        let offset = indexOp.immVal * sizeOf(elemType)
+        let offset = indexOp.immVal * asmSizeOf(elemType)
         result.isMem = true
         result.mem = MemoryOperand(
           base: baseReg,
@@ -719,7 +751,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
         error("Array index cannot be memory operand", n)
       else:
         # Register index: use scaled indexing
-        let elemSize = sizeOf(elemType)
+        let elemSize = asmSizeOf(elemType)
         if elemSize notin [1, 2, 4, 8]:
           error("Element size " & $elemSize & " not supported for scaled indexing (must be 1, 2, 4, or 8)", n)
 
@@ -2294,7 +2326,7 @@ proc pass2(n: var Cursor; ctx: var GenContext) =
           # Allocate space in .bss section
           let size = slots.alignedSize(sym.typ)
           # Align bssOffset to the type's alignment
-          let align = sizeOf(sym.typ)
+          let align = asmSizeOf(sym.typ)
           if align > 1:
             ctx.bssOffset = (ctx.bssOffset + align - 1) and not (align - 1)
 
