@@ -310,7 +310,7 @@ proc parseType(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
     inc n
     case t
     of BoolTagId:
-      result = TypeBool
+      result = Type(kind: BoolT)
     of ITagId:
       result = Type(kind: IntT, bits: int(getInt(n)))
       inc n
@@ -645,7 +645,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
     let t = n.tag
     if rawTagIsNifasmReg(t):
       result.reg = parseRegister(n)
-      result.typ = TypeInt64 # Explicit register usage is assumed to be Int64 compatible
+      result.typ = Type(kind: IntT, bits: 64) # Explicit register usage is assumed to be Int64 compatible
       # Check if this register is bound to a variable
       if result.reg in ctx.regBindings:
         error("Register " & $result.reg & " is bound to variable '" & 
@@ -780,7 +780,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
       result.reg = RAX
       result.label = LabelId(sym.offset)
       # Label address type is pointer to code?
-      result.typ = TypeUInt64 # Address
+      result.typ = Type(kind: UIntT, bits: 64) # Address
     elif t == CastTagId:
       inc n
       let castType = parseType(n, ctx.scope, ctx)
@@ -873,13 +873,13 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
           hasIndex: hasIndex
         )
         # Type is unknown for explicit addressing
-        result.typ = TypeInt64  # Default assumption
+        result.typ = Type(kind: IntT, bits: 64)  # Default assumption
 
       if n.kind != ParRi: error("Expected ) after mem", n)
       inc n
     elif t == SsizeTagId:
       result.isSsize = true
-      result.typ = TypeInt64
+      result.typ = Type(kind: IntT, bits: 64)
       inc n
       if n.kind != ParRi: error("Expected )", n)
       inc n
@@ -894,7 +894,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
     if expectedType != nil and (expectedType.kind in {IntT, UIntT, FloatT}):
         result.typ = expectedType
     else:
-        result.typ = TypeInt64 # Default
+        result.typ = Type(kind: IntT, bits: 64) # Default
   elif n.kind == Symbol:
     let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
@@ -932,12 +932,12 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
     elif sym != nil and sym.kind == skLabel:
       result.reg = RAX
       result.label = LabelId(sym.offset)
-      result.typ = TypeUInt64
+      result.typ = Type(kind: UIntT, bits: 64)
       inc n
     elif sym != nil and sym.kind == skRodata:
       result.reg = RAX
       result.label = LabelId(sym.offset)
-      result.typ = TypeUInt64 # Address of rodata
+      result.typ = Type(kind: UIntT, bits: 64) # Address of rodata
       inc n
     elif sym != nil and sym.kind == skGvar:
       # Global variable - return its address
@@ -946,7 +946,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
         error("Cannot access foreign global variable '" & name & "' directly (must be linked)", n)
       result.reg = RAX
       result.label = LabelId(sym.offset)
-      result.typ = TypeUInt64 # Address of gvar
+      result.typ = Type(kind: UIntT, bits: 64) # Address of gvar
       inc n
     elif sym != nil and sym.kind == skTvar:
       # Accessing thread local variable via FS segment
@@ -970,7 +970,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
 proc parseDest(n: var Cursor; ctx: var GenContext): Operand =
   if n.kind == ParLe and rawTagIsNifasmReg(n.tag):
     result.reg = parseRegister(n)
-    result.typ = TypeInt64
+    result.typ = Type(kind: IntT, bits: 64)
     # Check if this register is bound to a variable
     if result.reg in ctx.regBindings:
       error("Register " & $result.reg & " is bound to variable '" & 
@@ -1288,7 +1288,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     # Control flow variables are always virtual (bool type, never materialized)
     # We create a label for when this cfvar becomes "true"
     let cfvarLabel = ctx.buf.createLabel()
-    let sym = Symbol(name: name, kind: skCfvar, typ: TypeBool, offset: int(cfvarLabel), used: false)
+    let sym = Symbol(name: name, kind: skCfvar, typ: Type(kind: BoolT), offset: int(cfvarLabel), used: false)
     ctx.scope.define(sym)
 
     if n.kind != ParRi: error("Expected )", n)

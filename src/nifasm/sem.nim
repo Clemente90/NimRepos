@@ -137,12 +137,3 @@ proc compatible*(want, got: Type): bool =
     # For now, just check size or ref equality
     return want == got
   return false
-
-# Predefined types
-let
-  TypeBool* = Type(kind: BoolT)
-  TypeInt64* = Type(kind: IntT, bits: 64)
-  TypeUInt64* = Type(kind: UIntT, bits: 64)
-  TypeFloat64* = Type(kind: FloatT, bits: 64)
-  TypeVoid* = Type(kind: VoidT)
-  TypeError* = Type(kind: ErrorT)
