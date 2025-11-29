@@ -7,11 +7,11 @@ proc toNimName(s: string; suffix: string): string =
 
 type
   EnumList = enum
-    NifasmInst, NifasmType, NifasmDecl, NifasmExpr, NifasmOther, NifasmReg
+    X64Inst, NifasmType, NifasmDecl, NifasmExpr, NifasmOther, NifasmReg
 
 proc toSuffix(e: EnumList): (string, string) =
   case e
-  of NifasmInst: ("I", "NoInst")
+  of X64Inst: ("I", "NoInst")
   of NifasmType: ("T", "NoType")
   of NifasmDecl: ("D", "NoDecl")
   of NifasmExpr: ("X", "NoExpr")
@@ -140,12 +140,12 @@ proc genTags(inp: File) =
 
   createDir "src/nifasm"
   writeTagsFile "src/nifasm/tags.nim", tags
-  # writeModel "src/nifasm/nifasm_model.nim", enumDecls, NifasmInst, NifasmOther
-  # For now I'll just rely on tags.nim and manual casting or validation if needed, 
-  # or I can generate the model file if I decide to use it. 
+  # writeModel "src/nifasm/nifasm_model.nim", enumDecls, X64Inst, NifasmOther
+  # For now I'll just rely on tags.nim and manual casting or validation if needed,
+  # or I can generate the model file if I decide to use it.
   # Let's generate the model file too, it's useful.
-  
-  writeModel "src/nifasm/model.nim", enumDecls, NifasmInst, NifasmReg
+
+  writeModel "src/nifasm/model.nim", enumDecls, X64Inst, NifasmReg
 
 proc main =
   var inp = open("doc/tags.md", fmRead)

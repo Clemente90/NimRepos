@@ -19,140 +19,140 @@
 | `(var D L T)`          | NifasmDecl                  | variable declaration |
 | `(s)`                  | NifasmOther                 | stack slot location tag |
 | `(ssize)`              | NifasmExpr                  | stack size expression |
-| `(mov D S)`            | NifasmInst                  | move instruction |
-| `(lea D S)`            | NifasmInst                  | load effective address |
-| `(movapd D S)`         | NifasmInst                  | move aligned packed double |
-| `(movsd D S)`          | NifasmInst                  | move scalar double |
-| `(add D S)`            | NifasmInst                  | add instruction |
-| `(sub D S)`            | NifasmInst                  | subtract instruction |
-| `(mul S)`              | NifasmInst                  | unsigned multiply |
-| `(imul D S)`           | NifasmInst                  | signed multiply |
-| `(div D S R)`          | NifasmInst                  | unsigned divide |
-| `(idiv D S R)`         | NifasmInst                  | signed divide |
-| `(addsd D S)`          | NifasmInst                  | add scalar double |
-| `(subsd D S)`          | NifasmInst                  | subtract scalar double |
-| `(mulsd D S)`          | NifasmInst                  | multiply scalar double |
-| `(divsd D S)`          | NifasmInst                  | divide scalar double |
-| `(and D S)`            | NifasmInst                  | bitwise and |
-| `(or D S)`             | NifasmInst                  | bitwise or |
-| `(xor D S)`            | NifasmInst                  | bitwise xor |
-| `(shl D S)`            | NifasmInst                  | shift left |
-| `(shr D S)`            | NifasmInst                  | shift right |
-| `(sal D S)`            | NifasmInst                  | shift arithmetic left |
-| `(sar D S)`            | NifasmInst                  | shift arithmetic right |
-| `(inc O)`              | NifasmInst                  | increment |
-| `(dec O)`              | NifasmInst                  | decrement |
-| `(neg O)`              | NifasmInst                  | negate |
-| `(not O)`              | NifasmInst                  | bitwise not |
-| `(cmp D S)`            | NifasmInst                  | compare |
-| `(test D S)`           | NifasmInst                  | test |
-| `(sete D)`             | NifasmInst                  | set byte if equal |
-| `(setz D)`             | NifasmInst                  | set byte if zero |
-| `(setne D)`            | NifasmInst                  | set byte if not equal |
-| `(setnz D)`            | NifasmInst                  | set byte if not zero |
-| `(seta D)`             | NifasmInst                  | set byte if above |
-| `(setnbe D)`           | NifasmInst                  | set byte if not below or equal |
-| `(setae D)`            | NifasmInst                  | set byte if above or equal |
-| `(setnb D)`            | NifasmInst                  | set byte if not below |
-| `(setnc D)`            | NifasmInst                  | set byte if not carry |
-| `(setb D)`             | NifasmInst                  | set byte if below |
-| `(setnae D)`           | NifasmInst                  | set byte if not above or equal |
-| `(setc D)`             | NifasmInst                  | set byte if carry |
-| `(setbe D)`            | NifasmInst                  | set byte if below or equal |
-| `(setna D)`            | NifasmInst                  | set byte if not above |
-| `(setg D)`             | NifasmInst                  | set byte if greater |
-| `(setnle D)`           | NifasmInst                  | set byte if not less or equal |
-| `(setge D)`            | NifasmInst                  | set byte if greater or equal |
-| `(setnl D)`            | NifasmInst                  | set byte if not less |
-| `(setl D)`             | NifasmInst                  | set byte if less |
-| `(setnge D)`           | NifasmInst                  | set byte if not greater or equal |
-| `(setle D)`            | NifasmInst                  | set byte if less or equal |
-| `(setng D)`            | NifasmInst                  | set byte if not greater |
-| `(seto D)`             | NifasmInst                  | set byte if overflow |
-| `(sets D)`             | NifasmInst                  | set byte if sign |
-| `(setp D)`             | NifasmInst                  | set byte if parity |
-| `(cmove D S)`          | NifasmInst                  | conditional move if equal |
-| `(cmovz D S)`          | NifasmInst                  | conditional move if zero |
-| `(cmovne D S)`         | NifasmInst                  | conditional move if not equal |
-| `(cmovnz D S)`         | NifasmInst                  | conditional move if not zero |
-| `(cmova D S)`          | NifasmInst                  | conditional move if above |
-| `(cmovnbe D S)`        | NifasmInst                  | conditional move if not below or equal |
-| `(cmovae D S)`         | NifasmInst                  | conditional move if above or equal |
-| `(cmovnb D S)`         | NifasmInst                  | conditional move if not below |
-| `(cmovnc D S)`         | NifasmInst                  | conditional move if not carry |
-| `(cmovb D S)`          | NifasmInst                  | conditional move if below |
-| `(cmovnae D S)`        | NifasmInst                  | conditional move if not above or equal |
-| `(cmovc D S)`          | NifasmInst                  | conditional move if carry |
-| `(cmovbe D S)`         | NifasmInst                  | conditional move if below or equal |
-| `(cmovna D S)`         | NifasmInst                  | conditional move if not above |
-| `(cmovg D S)`          | NifasmInst                  | conditional move if greater |
-| `(cmovnle D S)`        | NifasmInst                  | conditional move if not less or equal |
-| `(cmovge D S)`         | NifasmInst                  | conditional move if greater or equal |
-| `(cmovnl D S)`         | NifasmInst                  | conditional move if not less |
-| `(cmovl D S)`          | NifasmInst                  | conditional move if less |
-| `(cmovnge D S)`        | NifasmInst                  | conditional move if not greater or equal |
-| `(cmovle D S)`         | NifasmInst                  | conditional move if less or equal |
-| `(cmovng D S)`         | NifasmInst                  | conditional move if not greater |
-| `(cmovo D S)`          | NifasmInst                  | conditional move if overflow |
-| `(cmovno D S)`         | NifasmInst                  | conditional move if not overflow |
-| `(cmovs D S)`          | NifasmInst                  | conditional move if sign |
-| `(cmovns D S)`         | NifasmInst                  | conditional move if not sign |
-| `(cmovp D S)`          | NifasmInst                  | conditional move if parity |
-| `(cmovnp D S)`         | NifasmInst                  | conditional move if not parity |
-| `(cmovpe D S)`         | NifasmInst                  | conditional move if parity even (alias for p) |
-| `(cmovpo D S)`         | NifasmInst                  | conditional move if parity odd (alias for np) |
-| `(jmp L)`              | NifasmInst                  | unconditional jump |
-| `(je L)`               | NifasmInst                  | jump if equal |
-| `(jz L)`               | NifasmInst                  | jump if zero |
-| `(jne L)`              | NifasmInst                  | jump if not equal |
-| `(jnz L)`              | NifasmInst                  | jump if not zero |
-| `(jg L)`               | NifasmInst                  | jump if greater |
-| `(jng L)`              | NifasmInst                  | jump if not greater |
-| `(jge L)`              | NifasmInst                  | jump if greater or equal |
-| `(jnge L)`             | NifasmInst                  | jump if not greater or equal |
-| `(ja L)`               | NifasmInst                  | jump if above |
-| `(jna L)`              | NifasmInst                  | jump if not above |
-| `(jae L)`              | NifasmInst                  | jump if above or equal |
-| `(jnae L)`             | NifasmInst                  | jump if not above or equal |
-| `(jl L)`               | NifasmInst                  | jump if less |
-| `(jle L)`              | NifasmInst                  | jump if less or equal |
-| `(jb L)`               | NifasmInst                  | jump if below |
-| `(jbe L)`              | NifasmInst                  | jump if below or equal |
-| `(call T ...)`         | NifasmInst                  | function call |
-| `(ret)`                | NifasmInst                  | return instruction |
-| `(push O)`             | NifasmInst                  | push to stack |
-| `(pop O)`              | NifasmInst                  | pop from stack |
-| `(nop)`                | NifasmInst                  | no operation |
-| `(syscall)`            | NifasmInst                  | system call |
-| `(lab L)`              | NifasmInst                  | label definition |
-| `(ite ...)`            | NifasmInst                  | if-then-else structure |
-| `(loop ...)`           | NifasmInst                  | loop structure |
-| `(stmts ...)`          | NifasmInst                  | statement block |
+| `(mov D S)`            | X64Inst                  | move instruction |
+| `(lea D S)`            | X64Inst                  | load effective address |
+| `(movapd D S)`         | X64Inst                  | move aligned packed double |
+| `(movsd D S)`          | X64Inst                  | move scalar double |
+| `(add D S)`            | X64Inst                  | add instruction |
+| `(sub D S)`            | X64Inst                  | subtract instruction |
+| `(mul S)`              | X64Inst                  | unsigned multiply |
+| `(imul D S)`           | X64Inst                  | signed multiply |
+| `(div D S R)`          | X64Inst                  | unsigned divide |
+| `(idiv D S R)`         | X64Inst                  | signed divide |
+| `(addsd D S)`          | X64Inst                  | add scalar double |
+| `(subsd D S)`          | X64Inst                  | subtract scalar double |
+| `(mulsd D S)`          | X64Inst                  | multiply scalar double |
+| `(divsd D S)`          | X64Inst                  | divide scalar double |
+| `(and D S)`            | X64Inst                  | bitwise and |
+| `(or D S)`             | X64Inst                  | bitwise or |
+| `(xor D S)`            | X64Inst                  | bitwise xor |
+| `(shl D S)`            | X64Inst                  | shift left |
+| `(shr D S)`            | X64Inst                  | shift right |
+| `(sal D S)`            | X64Inst                  | shift arithmetic left |
+| `(sar D S)`            | X64Inst                  | shift arithmetic right |
+| `(inc O)`              | X64Inst                  | increment |
+| `(dec O)`              | X64Inst                  | decrement |
+| `(neg O)`              | X64Inst                  | negate |
+| `(not O)`              | X64Inst                  | bitwise not |
+| `(cmp D S)`            | X64Inst                  | compare |
+| `(test D S)`           | X64Inst                  | test |
+| `(sete D)`             | X64Inst                  | set byte if equal |
+| `(setz D)`             | X64Inst                  | set byte if zero |
+| `(setne D)`            | X64Inst                  | set byte if not equal |
+| `(setnz D)`            | X64Inst                  | set byte if not zero |
+| `(seta D)`             | X64Inst                  | set byte if above |
+| `(setnbe D)`           | X64Inst                  | set byte if not below or equal |
+| `(setae D)`            | X64Inst                  | set byte if above or equal |
+| `(setnb D)`            | X64Inst                  | set byte if not below |
+| `(setnc D)`            | X64Inst                  | set byte if not carry |
+| `(setb D)`             | X64Inst                  | set byte if below |
+| `(setnae D)`           | X64Inst                  | set byte if not above or equal |
+| `(setc D)`             | X64Inst                  | set byte if carry |
+| `(setbe D)`            | X64Inst                  | set byte if below or equal |
+| `(setna D)`            | X64Inst                  | set byte if not above |
+| `(setg D)`             | X64Inst                  | set byte if greater |
+| `(setnle D)`           | X64Inst                  | set byte if not less or equal |
+| `(setge D)`            | X64Inst                  | set byte if greater or equal |
+| `(setnl D)`            | X64Inst                  | set byte if not less |
+| `(setl D)`             | X64Inst                  | set byte if less |
+| `(setnge D)`           | X64Inst                  | set byte if not greater or equal |
+| `(setle D)`            | X64Inst                  | set byte if less or equal |
+| `(setng D)`            | X64Inst                  | set byte if not greater |
+| `(seto D)`             | X64Inst                  | set byte if overflow |
+| `(sets D)`             | X64Inst                  | set byte if sign |
+| `(setp D)`             | X64Inst                  | set byte if parity |
+| `(cmove D S)`          | X64Inst                  | conditional move if equal |
+| `(cmovz D S)`          | X64Inst                  | conditional move if zero |
+| `(cmovne D S)`         | X64Inst                  | conditional move if not equal |
+| `(cmovnz D S)`         | X64Inst                  | conditional move if not zero |
+| `(cmova D S)`          | X64Inst                  | conditional move if above |
+| `(cmovnbe D S)`        | X64Inst                  | conditional move if not below or equal |
+| `(cmovae D S)`         | X64Inst                  | conditional move if above or equal |
+| `(cmovnb D S)`         | X64Inst                  | conditional move if not below |
+| `(cmovnc D S)`         | X64Inst                  | conditional move if not carry |
+| `(cmovb D S)`          | X64Inst                  | conditional move if below |
+| `(cmovnae D S)`        | X64Inst                  | conditional move if not above or equal |
+| `(cmovc D S)`          | X64Inst                  | conditional move if carry |
+| `(cmovbe D S)`         | X64Inst                  | conditional move if below or equal |
+| `(cmovna D S)`         | X64Inst                  | conditional move if not above |
+| `(cmovg D S)`          | X64Inst                  | conditional move if greater |
+| `(cmovnle D S)`        | X64Inst                  | conditional move if not less or equal |
+| `(cmovge D S)`         | X64Inst                  | conditional move if greater or equal |
+| `(cmovnl D S)`         | X64Inst                  | conditional move if not less |
+| `(cmovl D S)`          | X64Inst                  | conditional move if less |
+| `(cmovnge D S)`        | X64Inst                  | conditional move if not greater or equal |
+| `(cmovle D S)`         | X64Inst                  | conditional move if less or equal |
+| `(cmovng D S)`         | X64Inst                  | conditional move if not greater |
+| `(cmovo D S)`          | X64Inst                  | conditional move if overflow |
+| `(cmovno D S)`         | X64Inst                  | conditional move if not overflow |
+| `(cmovs D S)`          | X64Inst                  | conditional move if sign |
+| `(cmovns D S)`         | X64Inst                  | conditional move if not sign |
+| `(cmovp D S)`          | X64Inst                  | conditional move if parity |
+| `(cmovnp D S)`         | X64Inst                  | conditional move if not parity |
+| `(cmovpe D S)`         | X64Inst                  | conditional move if parity even (alias for p) |
+| `(cmovpo D S)`         | X64Inst                  | conditional move if parity odd (alias for np) |
+| `(jmp L)`              | X64Inst                  | unconditional jump |
+| `(je L)`               | X64Inst                  | jump if equal |
+| `(jz L)`               | X64Inst                  | jump if zero |
+| `(jne L)`              | X64Inst                  | jump if not equal |
+| `(jnz L)`              | X64Inst                  | jump if not zero |
+| `(jg L)`               | X64Inst                  | jump if greater |
+| `(jng L)`              | X64Inst                  | jump if not greater |
+| `(jge L)`              | X64Inst                  | jump if greater or equal |
+| `(jnge L)`             | X64Inst                  | jump if not greater or equal |
+| `(ja L)`               | X64Inst                  | jump if above |
+| `(jna L)`              | X64Inst                  | jump if not above |
+| `(jae L)`              | X64Inst                  | jump if above or equal |
+| `(jnae L)`             | X64Inst                  | jump if not above or equal |
+| `(jl L)`               | X64Inst                  | jump if less |
+| `(jle L)`              | X64Inst                  | jump if less or equal |
+| `(jb L)`               | X64Inst                  | jump if below |
+| `(jbe L)`              | X64Inst                  | jump if below or equal |
+| `(call T ...)`         | X64Inst                  | function call |
+| `(ret)`                | X64Inst                  | return instruction |
+| `(push O)`             | X64Inst                  | push to stack |
+| `(pop O)`              | X64Inst                  | pop from stack |
+| `(nop)`                | X64Inst                  | no operation |
+| `(syscall)`            | X64Inst                  | system call |
+| `(lab L)`              | X64Inst                  | label definition |
+| `(ite ...)`            | X64Inst                  | if-then-else structure |
+| `(loop ...)`           | X64Inst                  | loop structure |
+| `(stmts ...)`          | X64Inst                  | statement block |
 | `(cfvar D)`            | NifasmDecl                  | control flow variable declaration |
-| `(jtrue ...)`          | NifasmInst                  | set control flow variable(s) to true |
+| `(jtrue ...)`          | X64Inst                  | set control flow variable(s) to true |
 | `(dot B F)`            | NifasmExpr                  | field access |
 | `(at B I)`             | NifasmExpr                  | array index |
 | `(mem ...)`            | NifasmExpr                  | memory reference |
 | `(rodata L S)`         | NifasmDecl                  | read-only data (string/bytes) |
 | `(gvar D L T)`         | NifasmDecl                  | global variable |
 | `(tvar D L T)`         | NifasmDecl                  | thread local variable |
-| `(kill S)`             | NifasmInst                  | kill variable |
+| `(kill S)`             | X64Inst                  | kill variable |
 | `(cast T E)`         | NifasmExpr                  | type cast |
-| `(lock I)`             | NifasmInst                  | atomic lock prefix |
-| `(xchg D S)`           | NifasmInst                  | atomic exchange |
-| `(cmpxchg D S)`        | NifasmInst                  | atomic compare and exchange |
-| `(xadd D S)`           | NifasmInst                  | atomic exchange and add |
-| `(cmpxchg8b D)`        | NifasmInst                  | atomic compare and exchange 8 bytes |
-| `(mfence)`             | NifasmInst                  | memory fence |
-| `(sfence)`             | NifasmInst                  | store fence |
-| `(lfence)`             | NifasmInst                  | load fence |
-| `(pause)`              | NifasmInst                  | pause |
-| `(clflush O)`          | NifasmInst                  | cache line flush |
-| `(clflushopt O)`       | NifasmInst                  | optimized cache line flush |
-| `(prefetcht0 O)`       | NifasmInst                  | prefetch t0 |
-| `(prefetcht1 O)`       | NifasmInst                  | prefetch t1 |
-| `(prefetcht2 O)`       | NifasmInst                  | prefetch t2 |
-| `(prefetchnta O)`      | NifasmInst                  | prefetch non-temporal |
+| `(lock I)`             | X64Inst                  | atomic lock prefix |
+| `(xchg D S)`           | X64Inst                  | atomic exchange |
+| `(cmpxchg D S)`        | X64Inst                  | atomic compare and exchange |
+| `(xadd D S)`           | X64Inst                  | atomic exchange and add |
+| `(cmpxchg8b D)`        | X64Inst                  | atomic compare and exchange 8 bytes |
+| `(mfence)`             | X64Inst                  | memory fence |
+| `(sfence)`             | X64Inst                  | store fence |
+| `(lfence)`             | X64Inst                  | load fence |
+| `(pause)`              | X64Inst                  | pause |
+| `(clflush O)`          | X64Inst                  | cache line flush |
+| `(clflushopt O)`       | X64Inst                  | optimized cache line flush |
+| `(prefetcht0 O)`       | X64Inst                  | prefetch t0 |
+| `(prefetcht1 O)`       | X64Inst                  | prefetch t1 |
+| `(prefetcht2 O)`       | X64Inst                  | prefetch t2 |
+| `(prefetchnta O)`      | X64Inst                  | prefetch non-temporal |
 | `(rax)`              | NifasmReg                   | register rax |
 | `(rbx)`              | NifasmReg                   | register rbx |
 | `(rcx)`              | NifasmReg                   | register rcx |

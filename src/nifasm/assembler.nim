@@ -139,24 +139,24 @@ proc parseObjectBody(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
       inc n
       let ftype = parseType(n, scope, ctx)
       fields.add (name, ftype)
-      
+
       # Align field to its natural alignment
       let fieldAlign = asmAlignOf(ftype)
       offset = alignTo(offset, fieldAlign)
-      
+
       # Track maximum alignment for the struct
       if fieldAlign > maxAlign:
         maxAlign = fieldAlign
-      
+
       # Move past this field
       offset += asmSizeOf(ftype)
-      
+
       if n.kind != ParRi: error("Expected )", n)
       inc n
     else:
       error("Expected field definition", n)
   inc n
-  
+
   # Round up total size to be a multiple of the struct's alignment
   let finalSize = alignTo(offset, maxAlign)
   result = Type(kind: ObjectT, fields: fields, size: finalSize, align: maxAlign)
@@ -343,7 +343,7 @@ proc parseUnionBody(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
   var fields: seq[(string, Type)] = @[]
   var maxSize = 0
   var maxAlign = 1  # Track maximum alignment requirement
-  inc n 
+  inc n
   while n.kind != ParRi:
     if n.kind == ParLe and n.tag == FldTagId:
       inc n
@@ -352,24 +352,24 @@ proc parseUnionBody(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
       inc n
       let ftype = parseType(n, scope, ctx)
       fields.add (name, ftype)
-      
+
       let size = asmSizeOf(ftype)
       let fieldAlign = asmAlignOf(ftype)
-      
+
       # Union size is the maximum of all field sizes
       if size > maxSize:
         maxSize = size
-      
+
       # Track maximum alignment
       if fieldAlign > maxAlign:
         maxAlign = fieldAlign
-      
+
       if n.kind != ParRi: error("Expected )", n)
       inc n
     else:
       error("Expected field definition", n)
   inc n
-  
+
   # Round up size to be a multiple of the union's alignment
   let finalSize = alignTo(maxSize, maxAlign)
   result = Type(kind: UnionT, fields: fields, size: finalSize, align: maxAlign)
@@ -648,7 +648,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
       result.typ = Type(kind: IntT, bits: 64) # Explicit register usage is assumed to be Int64 compatible
       # Check if this register is bound to a variable
       if result.reg in ctx.regBindings:
-        error("Register " & $result.reg & " is bound to variable '" & 
+        error("Register " & $result.reg & " is bound to variable '" &
               ctx.regBindings[result.reg] & "', use the variable name instead", n)
     elif t == DotTagId:
       # (dot <base> <fieldname>)
@@ -659,7 +659,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
         error("Expected field name in dot expression", n)
       let fieldName = getSym(n)
       inc n
-      
+
       # Type check: base must be a pointer to an object/union, or a stack variable with object/union type
       var objType: Type
       var baseReg: Register
@@ -678,7 +678,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
         baseDisp = baseOp.mem.displacement
       else:
         error("dot requires pointer to object/union or stack object/union, got " & $baseOp.typ, n)
-      
+
       # Find field in object/union type
       var fieldOffset = 0
       var fieldType: Type = nil
@@ -687,18 +687,18 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
         if objType.kind == TypeKind.ObjectT:
           # Align to field's natural alignment
           fieldOffset = alignTo(fieldOffset, asmAlignOf(ftype))
-        
+
         if fname == fieldName:
           fieldType = ftype
           break
-        
+
         # For objects, move past this field
         if objType.kind == TypeKind.ObjectT:
           fieldOffset += asmSizeOf(ftype)
-      
+
       if fieldType == nil:
         error("Field '" & fieldName & "' not found in " & $objType.kind, n)
-      
+
       # Result is memory operand pointing to the field
       result.isMem = true
       result.mem = MemoryOperand(
@@ -973,7 +973,7 @@ proc parseDest(n: var Cursor; ctx: var GenContext): Operand =
     result.typ = Type(kind: IntT, bits: 64)
     # Check if this register is bound to a variable
     if result.reg in ctx.regBindings:
-      error("Register " & $result.reg & " is bound to variable '" & 
+      error("Register " & $result.reg & " is bound to variable '" &
             ctx.regBindings[result.reg] & "', use the variable name instead", n)
   elif n.kind == Symbol:
     let name = getSym(n)
@@ -1331,7 +1331,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
        # Check if register is already bound to another variable
        let targetReg = tagToRegister(reg)
        if targetReg in ctx.regBindings:
-         error("Register " & $targetReg & " is already bound to variable '" & 
+         error("Register " & $targetReg & " is already bound to variable '" &
                ctx.regBindings[targetReg] & "', kill it first before reusing", n)
        # Track the register binding
        ctx.regBindings[targetReg] = name
@@ -2362,10 +2362,10 @@ proc pass2(n: var Cursor; ctx: var GenContext) =
 
           inc n # )
         else:
-          if rawTagIsNifasmInst(n.tag) or n.tag == IteTagId or n.tag == LoopTagId:
-             genInst(n, ctx)
+          if rawTagIsX64Inst(n.tag) or n.tag == IteTagId or n.tag == LoopTagId:
+            genInst(n, ctx)
           else:
-             skip n
+            skip n
       else:
         skip n
     inc n
