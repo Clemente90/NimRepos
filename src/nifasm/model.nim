@@ -201,7 +201,7 @@ proc rawTagIsNifasmOther*(raw: TagEnum): bool {.inline.} =
   raw in {STagId, OfTagId, NoTagId, ZfTagId, NzTagId, SfTagId, NsTagId, CfTagId, NcTagId, PfTagId, NpTagId}
 
 type
-  NifasmReg* = enum
+  X64Reg* = enum
     NoReg
     RaxR = (ord(RaxTagId), "rax")  ## register rax
     RbxR = (ord(RbxTagId), "rbx")  ## register rbx
@@ -244,6 +244,6 @@ type
     Xmm14R = (ord(Xmm14TagId), "xmm14")  ## register xmm14
     Xmm15R = (ord(Xmm15TagId), "xmm15")  ## register xmm15
 
-proc rawTagIsNifasmReg*(raw: TagEnum): bool {.inline.} =
+proc rawTagIsX64Reg*(raw: TagEnum): bool {.inline.} =
   raw >= RaxTagId and raw <= Xmm15TagId
 

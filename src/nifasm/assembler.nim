@@ -389,7 +389,7 @@ proc parseParams(n: var Cursor; scope: Scope; ctx: var GenContext): seq[Param] =
       var onStack = false
       if n.kind == ParLe:
         let locTag = n.tag
-        if rawTagIsNifasmReg(locTag):
+        if rawTagIsX64Reg(locTag):
           reg = locTag
           inc n
           if n.kind != ParRi: error("Expected )", n)
@@ -430,7 +430,7 @@ proc parseResult(n: var Cursor; scope: Scope; ctx: var GenContext): seq[Param] =
     var reg = InvalidTagId
     if n.kind == ParLe:
       let locTag = n.tag
-      if rawTagIsNifasmReg(locTag):
+      if rawTagIsX64Reg(locTag):
         reg = locTag
         inc n
         if n.kind != ParRi: error("Expected )", n)
@@ -454,7 +454,7 @@ proc parseClobbers(n: var Cursor): set[Register] =
   if n.kind == ParLe and n.tag == ClobberTagId:
     inc n
     while n.kind != ParRi:
-      if n.kind == ParLe and rawTagIsNifasmReg(n.tag):
+      if n.kind == ParLe and rawTagIsX64Reg(n.tag):
         result.incl parseRegister(n)
       else:
         error("Expected register in clobber list", n)
@@ -643,7 +643,7 @@ proc canDoBitwiseOps(t: Type): bool =
 proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil): Operand =
   if n.kind == ParLe:
     let t = n.tag
-    if rawTagIsNifasmReg(t):
+    if rawTagIsX64Reg(t):
       result.reg = parseRegister(n)
       result.typ = Type(kind: IntT, bits: 64) # Explicit register usage is assumed to be Int64 compatible
       # Check if this register is bound to a variable
@@ -968,7 +968,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
     error("Unexpected operand kind", n)
 
 proc parseDest(n: var Cursor; ctx: var GenContext): Operand =
-  if n.kind == ParLe and rawTagIsNifasmReg(n.tag):
+  if n.kind == ParLe and rawTagIsX64Reg(n.tag):
     result.reg = parseRegister(n)
     result.typ = Type(kind: IntT, bits: 64)
     # Check if this register is bound to a variable
@@ -1304,7 +1304,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     var onStack = false
     if n.kind == ParLe:
       let locTag = n.tag
-      if rawTagIsNifasmReg(locTag):
+      if rawTagIsX64Reg(locTag):
         reg = locTag
         inc n
         if n.kind != ParRi: error("Expected )", n)
