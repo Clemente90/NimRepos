@@ -152,7 +152,7 @@
 | `(rodata L S)`         | NifasmDecl                  | read-only data (string/bytes) |
 | `(gvar D L T)`         | NifasmDecl                  | global variable |
 | `(tvar D L T)`         | NifasmDecl                  | thread local variable |
-| `(kill S)`             | X64Inst                  | kill variable |
+| `(kill S)`             | X64Inst, A64Inst            | kill variable |
 | `(cast T E)`         | NifasmExpr                  | type cast |
 | `(lock I)`             | X64Inst                  | atomic lock prefix |
 | `(xchg D S)`           | X64Inst                  | atomic exchange |

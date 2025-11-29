@@ -97,10 +97,15 @@ type
     stream: nifstreams.Stream
     loaded: bool  # True if already loaded into scope
 
+  Arch = enum
+    X64
+    A64
+
   GenContext = object
     scope: Scope
     buf: Buffer  # Code buffer (.text section)
     bssBuf: Buffer  # BSS buffer (.bss section) for zero-initialized global variables
+    arch: Arch
     procName: string
     inCall: bool
     clobbered: set[Register] # Registers clobbered in current flow
@@ -547,7 +552,15 @@ proc pass1(n: var Cursor; scope: Scope; ctx: var GenContext) =
         skip n
     inc n
 
-proc genInst(n: var Cursor; ctx: var GenContext)
+proc genInstX64(n: var Cursor; ctx: var GenContext)
+
+proc genInst(n: var Cursor; ctx: var GenContext) =
+  case ctx.arch
+  of Arch.X64:
+    genInstX64(n, ctx)
+  of Arch.A64:
+    #genInstA64(n, ctx)
+    discard "todo"
 
 proc pass2Proc(n: var Cursor; ctx: var GenContext) =
   let oldScope = ctx.scope
@@ -1052,7 +1065,7 @@ proc checkCompatibleTypes(t1, t2: Type; op: string; n: Cursor) =
   if not compatible(t1, t2):
     error("Operation '" & op & "' requires compatible types, got " & $t1 & " and " & $t2, n)
 
-proc genInst(n: var Cursor; ctx: var GenContext) =
+proc genInstX64(n: var Cursor; ctx: var GenContext) =
   if n.kind != ParLe: error("Expected instruction", n)
   let instTag = tagToX64Inst(n.tag)
   let start = n
@@ -2024,18 +2037,18 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
     # Pass 1 does not scan bodies for labels.
     # So we create it here if missing.
     if sym == nil:
-       let labId = ctx.buf.createLabel()
-       ctx.scope.define(Symbol(name: name, kind: skLabel, offset: int(labId)))
-       ctx.buf.defineLabel(labId)
+      let labId = ctx.buf.createLabel()
+      ctx.scope.define(Symbol(name: name, kind: skLabel, offset: int(labId)))
+      ctx.buf.defineLabel(labId)
     elif sym.kind == skLabel:
-       if sym.offset == -1:
-          let labId = ctx.buf.createLabel()
-          sym.offset = int(labId)
-          ctx.buf.defineLabel(labId)
-       else:
-          ctx.buf.defineLabel(LabelId(sym.offset))
+      if sym.offset == -1:
+        let labId = ctx.buf.createLabel()
+        sym.offset = int(labId)
+        ctx.buf.defineLabel(labId)
+      else:
+        ctx.buf.defineLabel(LabelId(sym.offset))
     else:
-       error("Symbol is not a label", n)
+      error("Symbol is not a label", n)
     inc n
     if n.kind != ParRi: error("Expected )", n)
     inc n
@@ -2281,7 +2294,7 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   if n.kind != ParRi: error("Expected ) at end of instruction", n)
   inc n
 
-proc pass2(n: var Cursor; ctx: var GenContext) =
+proc pass2(n: Cursor; ctx: var GenContext) =
   var n = n
   if n.kind == ParLe and n.tag == StmtsTagId:
     inc n
@@ -2459,8 +2472,7 @@ proc assemble*(filename, outfile: string) =
   # Update ctx with proper buffers for pass2
   ctx.buf = initBuffer()
   ctx.bssBuf = initBuffer()
-  var n2 = n
-  pass2(n2, ctx)
+  pass2(n, ctx)
 
   writeElf(ctx, outfile)
 

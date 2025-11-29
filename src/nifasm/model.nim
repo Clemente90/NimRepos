@@ -163,9 +163,10 @@ type
     BlA64 = (ord(BlTagId), "bl")  ## branch with link (function call)
     BeqA64 = (ord(BeqTagId), "beq")  ## branch if equal
     BneA64 = (ord(BneTagId), "bne")  ## branch if not equal
+    KillA64 = (ord(KillTagId), "kill")  ## kill variable
 
 proc rawTagIsA64Inst*(raw: TagEnum): bool {.inline.} =
-  raw in {MovTagId, AddTagId, SubTagId, MulTagId, SdivTagId, UdivTagId, AndTagId, OrrTagId, EorTagId, LslTagId, LsrTagId, AsrTagId, NegTagId, CmpTagId, RetTagId, NopTagId, SvcTagId, LdrTagId, StrTagId, StpTagId, LdpTagId, BTagId, BlTagId, BeqTagId, BneTagId}
+  raw in {MovTagId, AddTagId, SubTagId, MulTagId, SdivTagId, UdivTagId, AndTagId, OrrTagId, EorTagId, LslTagId, LsrTagId, AsrTagId, NegTagId, CmpTagId, RetTagId, NopTagId, SvcTagId, LdrTagId, StrTagId, StpTagId, LdpTagId, BTagId, BlTagId, BeqTagId, BneTagId, KillTagId}
 
 type
   NifasmType* = enum
