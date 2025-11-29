@@ -1,7 +1,7 @@
 # Nifasm - x86_64 Binary Assembler
 # A dependency-free x86_64 assembler that emits binary instruction bytes
 
-import std/[strutils, tables]
+import std/tables
 
 import buffers
 
@@ -41,7 +41,7 @@ type
   RelocKind* = enum
     rkCall, rkJmp, rkJe, rkJne, rkJg, rkJl, rkJge, rkJle, rkJa, rkJb, rkJae, rkJbe,
     rkJo, rkJno, rkJs, rkJns, rkJp, rkJnp, rkLea
-    #rkB, rkBL, rkBEQ, rkBNE, rkCBZ, rkCBNZ, rkTBZ, rkTBNZ, rkADR, rkADRP
+    rkB, rkBL, rkBEQ, rkBNE, rkCBZ, rkCBNZ, rkTBZ, rkTBNZ, rkADR, rkADRP
 
   # Relocation entry for optimization and patching
   RelocEntry* = object
@@ -98,12 +98,14 @@ proc getCurrentPosition*(buf: Bytes): int =
 proc calculateRelocDistance*(fromPos: int; toPos: int; kind: RelocKind = rkJmp): int =
   ## Calculate the distance for a relative instruction
   ## For x86-64, the distance is calculated from after the entire instruction
-  let instructionSize =
-    case kind
-    of rkCall, rkJmp: 5
-    of rkLea: 7
-    else: 6
-  toPos - (fromPos + instructionSize)  # Distance from after the complete instruction
+  ## For ARM64, the distance is calculated from the start of the instruction
+  case kind
+  of rkCall, rkJmp: toPos - (fromPos + 5)  # x86: distance from after the complete instruction
+  of rkLea: toPos - (fromPos + 7)
+  of rkJe, rkJne, rkJg, rkJl, rkJge, rkJle, rkJa, rkJb, rkJae, rkJbe,
+     rkJo, rkJno, rkJs, rkJns, rkJp, rkJnp: toPos - (fromPos + 6)
+  of rkB, rkBL, rkBEQ, rkBNE, rkCBZ, rkCBNZ, rkTBZ, rkTBNZ, rkADR, rkADRP:
+    toPos - fromPos  # ARM64: distance from start of instruction (will be divided by 4 later)
 
 proc canUseShortJump*(distance: int): bool =
   ## Check if a jump can use 8-bit displacement
@@ -1877,6 +1879,8 @@ proc updateRelocDisplacements*(buf: var Buffer) =
       of rkJe, rkJne, rkJg, rkJl, rkJge, rkJle, rkJa, rkJb, rkJae, rkJbe,
          rkJo, rkJno, rkJs, rkJns, rkJp, rkJnp:
         currentPos + 6
+      of rkB, rkBL, rkBEQ, rkBNE, rkCBZ, rkCBNZ, rkTBZ, rkTBNZ, rkADR, rkADRP:
+        currentPos + 4  # All ARM64 instructions are 4 bytes
 
     if requiredSize > buf.data.len:
       continue  # Skip this relocation if buffer is too small
@@ -1917,6 +1921,93 @@ proc updateRelocDisplacements*(buf: var Buffer) =
       buf.data[currentPos + 3] = byte((signedDistance shr 8) and 0xFF)
       buf.data[currentPos + 4] = byte((signedDistance shr 16) and 0xFF)
       buf.data[currentPos + 5] = byte((signedDistance shr 24) and 0xFF)
+    of rkB, rkBL:
+      # ARM64 B/BL: 26-bit signed immediate, offset in instructions (divide distance by 4)
+      let offsetInInstructions = distance div 4
+      let imm26 = uint32(int32(offsetInInstructions) and 0x03FFFFFF)
+      # Read existing instruction, preserve opcode bits (bits 31:26)
+      let baseInstr = uint32(buf.data[currentPos]) or
+                      (uint32(buf.data[currentPos + 1]) shl 8) or
+                      (uint32(buf.data[currentPos + 2]) shl 16) or
+                      (uint32(buf.data[currentPos + 3]) shl 24)
+      let instr = (baseInstr and 0xFC000000'u32) or imm26
+      buf.data[currentPos] = byte(instr and 0xFF)
+      buf.data[currentPos + 1] = byte((instr shr 8) and 0xFF)
+      buf.data[currentPos + 2] = byte((instr shr 16) and 0xFF)
+      buf.data[currentPos + 3] = byte((instr shr 24) and 0xFF)
+    of rkBEQ, rkBNE:
+      # ARM64 conditional branches: 19-bit signed immediate, offset in instructions
+      let offsetInInstructions = distance div 4
+      let imm19 = uint32(int32(offsetInInstructions) and 0x7FFFF)
+      let baseInstr = uint32(buf.data[currentPos]) or
+                      (uint32(buf.data[currentPos + 1]) shl 8) or
+                      (uint32(buf.data[currentPos + 2]) shl 16) or
+                      (uint32(buf.data[currentPos + 3]) shl 24)
+      let instr = (baseInstr and 0xFF00001F'u32) or (imm19 shl 5)
+      buf.data[currentPos] = byte(instr and 0xFF)
+      buf.data[currentPos + 1] = byte((instr shr 8) and 0xFF)
+      buf.data[currentPos + 2] = byte((instr shr 16) and 0xFF)
+      buf.data[currentPos + 3] = byte((instr shr 24) and 0xFF)
+    of rkCBZ, rkCBNZ:
+      # ARM64 compare and branch: 19-bit signed immediate, offset in instructions
+      let offsetInInstructions = distance div 4
+      let imm19 = uint32(int32(offsetInInstructions) and 0x7FFFF)
+      let baseInstr = uint32(buf.data[currentPos]) or
+                      (uint32(buf.data[currentPos + 1]) shl 8) or
+                      (uint32(buf.data[currentPos + 2]) shl 16) or
+                      (uint32(buf.data[currentPos + 3]) shl 24)
+      let instr = (baseInstr and 0xFF00001F'u32) or (imm19 shl 5)
+      buf.data[currentPos] = byte(instr and 0xFF)
+      buf.data[currentPos + 1] = byte((instr shr 8) and 0xFF)
+      buf.data[currentPos + 2] = byte((instr shr 16) and 0xFF)
+      buf.data[currentPos + 3] = byte((instr shr 24) and 0xFF)
+    of rkTBZ, rkTBNZ:
+      # ARM64 test bit and branch: 14-bit signed immediate, offset in instructions
+      let offsetInInstructions = distance div 4
+      let imm14 = uint32(int32(offsetInInstructions) and 0x3FFF)
+      let baseInstr = uint32(buf.data[currentPos]) or
+                      (uint32(buf.data[currentPos + 1]) shl 8) or
+                      (uint32(buf.data[currentPos + 2]) shl 16) or
+                      (uint32(buf.data[currentPos + 3]) shl 24)
+      let instr = (baseInstr and 0xFFF8001F'u32) or (imm14 shl 5)
+      buf.data[currentPos] = byte(instr and 0xFF)
+      buf.data[currentPos + 1] = byte((instr shr 8) and 0xFF)
+      buf.data[currentPos + 2] = byte((instr shr 16) and 0xFF)
+      buf.data[currentPos + 3] = byte((instr shr 24) and 0xFF)
+    of rkADR:
+      # ARM64 ADR: 21-bit signed immediate, offset in instructions
+      let offsetInInstructions = distance div 4
+      let imm21 = uint32(int32(offsetInInstructions) and 0x1FFFFF)
+      let baseInstr = uint32(buf.data[currentPos]) or
+                      (uint32(buf.data[currentPos + 1]) shl 8) or
+                      (uint32(buf.data[currentPos + 2]) shl 16) or
+                      (uint32(buf.data[currentPos + 3]) shl 24)
+      # ADR encoding: immhi:immlo at bits 30:29 and 23:5
+      let immlo = (imm21 and 0x03'u32) shl 29
+      let immhi = (imm21 shr 2) shl 5
+      let instr = (baseInstr and 0x9F00001F'u32) or immlo or immhi
+      buf.data[currentPos] = byte(instr and 0xFF)
+      buf.data[currentPos + 1] = byte((instr shr 8) and 0xFF)
+      buf.data[currentPos + 2] = byte((instr shr 16) and 0xFF)
+      buf.data[currentPos + 3] = byte((instr shr 24) and 0xFF)
+    of rkADRP:
+      # ARM64 ADRP: 21-bit signed immediate (page address), offset in instructions
+      # Page address = (offset_in_instructions * 4) and 0xFFFFF000
+      let offsetInInstructions = distance div 4
+      let pageOffset = (offsetInInstructions * 4) div 4096  # Page offset (12-bit aligned)
+      let imm21 = uint32(int32(pageOffset) and 0x1FFFFF)
+      let baseInstr = uint32(buf.data[currentPos]) or
+                      (uint32(buf.data[currentPos + 1]) shl 8) or
+                      (uint32(buf.data[currentPos + 2]) shl 16) or
+                      (uint32(buf.data[currentPos + 3]) shl 24)
+      # ADRP encoding: immhi:immlo at bits 30:29 and 23:5
+      let immlo = (imm21 and 0x03'u32) shl 29
+      let immhi = (imm21 shr 2) shl 5
+      let instr = (baseInstr and 0x9F00001F'u32) or immlo or immhi
+      buf.data[currentPos] = byte(instr and 0xFF)
+      buf.data[currentPos + 1] = byte((instr shr 8) and 0xFF)
+      buf.data[currentPos + 2] = byte((instr shr 16) and 0xFF)
+      buf.data[currentPos + 3] = byte((instr shr 24) and 0xFF)
 
 proc optimizeJumps*(buf: Buffer): Buffer =
   ## Optimize all jump instructions by creating a new optimized buffer
@@ -1972,6 +2063,8 @@ proc optimizeJumps*(buf: Buffer): Buffer =
           of rkCall, rkJmp: 5
           of rkJe, rkJne, rkJg, rkJl, rkJge, rkJle, rkJa, rkJb, rkJae, rkJbe,
              rkJo, rkJno, rkJs, rkJns, rkJp, rkJnp: 6
+          of rkB, rkBL, rkBEQ, rkBNE, rkCBZ, rkCBNZ, rkTBZ, rkTBNZ, rkADR, rkADRP:
+            4  # All ARM64 instructions are 4 bytes
 
         # Check if we can use a short jump
         if reloc.kind == rkLea:
@@ -1983,6 +2076,16 @@ proc optimizeJumps*(buf: Buffer): Buffer =
           newBuf.data.addt32(int32(distance))
           addedBytes = 7
 
+          # Keep track of this relocation in the new buffer
+          newBuf.addReloc(currentNewPos, reloc.target, reloc.kind, reloc.originalSize)
+
+        elif reloc.kind in {rkB, rkBL, rkBEQ, rkBNE, rkCBZ, rkCBNZ, rkTBZ, rkTBNZ, rkADR, rkADRP}:
+          # ARM64 instructions are fixed size (4 bytes), copy as-is
+          newBuf.data.add(optimized.data[i])
+          newBuf.data.add(optimized.data[i + 1])
+          newBuf.data.add(optimized.data[i + 2])
+          newBuf.data.add(optimized.data[i + 3])
+          addedBytes = 4
           # Keep track of this relocation in the new buffer
           newBuf.addReloc(currentNewPos, reloc.target, reloc.kind, reloc.originalSize)
 
@@ -2028,6 +2131,9 @@ proc optimizeJumps*(buf: Buffer): Buffer =
             newBuf.data.add(byte(distance and 0xFF))
             addedBytes = 2
             changed = true
+          else:
+            # ARM64 relocations should be handled earlier, this should never be reached
+            raise newException(ValueError, "ARM64 relocation in x86 short jump path: " & $reloc.kind)
         else:
           # Use 32-bit displacement
           case reloc.kind
@@ -2068,6 +2174,9 @@ proc optimizeJumps*(buf: Buffer): Buffer =
             newBuf.data.addt32(int32(distance))
             addedBytes = 6
             newBuf.addReloc(currentNewPos, reloc.target, reloc.kind, reloc.originalSize)
+          else:
+            # ARM64 relocations should be handled earlier, this should never be reached
+            raise newException(ValueError, "ARM64 relocation in x86 32-bit jump path: " & $reloc.kind)
 
         # Skip the original instruction bytes
         i += originalSize
