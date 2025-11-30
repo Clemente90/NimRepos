@@ -2,7 +2,7 @@
 import std / [tables, streams, os, osproc]
 import "../../../nimony/src/lib" / [nifreader, nifstreams, nifcursors, bitabs, lineinfos, symparser]
 import tags, model, tagconv
-import buffers, x86, arm64, elf, macho
+import buffers, x86, arm64, elf, macho, exe
 import sem, slots
 
 proc tag(n: Cursor): TagEnum = cast[TagEnum](n.tagId)
@@ -119,8 +119,10 @@ type
     loaded: bool  # True if already loaded into scope
 
   Arch = enum
-    X64
-    A64
+    X64        # Linux x86-64 (ELF)
+    A64        # macOS ARM64 (Mach-O)
+    WinX64     # Windows x86-64 (PE)
+    WinA64     # Windows ARM64 (PE)
 
   ImportedLib = object
     name: string     # Library path (e.g. "/usr/lib/libSystem.B.dylib")
@@ -546,6 +548,10 @@ proc handleArch(n: var Cursor; ctx: var GenContext) =
     ctx.arch = Arch.X64
   elif arch == "arm64":
     ctx.arch = Arch.A64
+  elif arch == "win_x64":
+    ctx.arch = Arch.WinX64
+  elif arch == "win_arm64":
+    ctx.arch = Arch.WinA64
   else:
     error("Unknown architecture: " & arch, n)
   inc n
@@ -1034,8 +1040,8 @@ proc genInstA64(n: var Cursor; ctx: var GenContext) =
     ctx.inCall = true
     defer: ctx.inCall = false
     inc n
-    if n.kind notin {Symbol, Ident}: error("Expected proc symbol, got " & $n.kind, n)
-    let name = if n.kind == Ident: pool.strings[n.litId] else: getSym(n)
+    if n.kind != Symbol: error("Expected proc symbol, got " & $n.kind, n)
+    let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
     if sym == nil or sym.kind notin {skProc, skExtProc}: error("Unknown proc: " & name, n)
     if sym.isForeign:
@@ -1556,9 +1562,9 @@ proc genInstA64(n: var Cursor; ctx: var GenContext) =
 
 proc genInst(n: var Cursor; ctx: var GenContext) =
   case ctx.arch
-  of Arch.X64:
+  of Arch.X64, Arch.WinX64:
     genInstX64(n, ctx)
-  of Arch.A64:
+  of Arch.A64, Arch.WinA64:
     genInstA64(n, ctx)
 
 proc pass2Proc(n: var Cursor; ctx: var GenContext) =
@@ -2058,12 +2064,34 @@ proc genInstX64(n: var Cursor; ctx: var GenContext) =
     defer: ctx.inCall = false
     # (call target (mov arg val) ...)
     inc n
-    if n.kind != Symbol: error("Expected proc symbol", n)
+    if n.kind != Symbol: error("Expected proc symbol, got " & $n.kind, n)
     let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
-    if sym == nil or sym.kind != skProc: error("Unknown proc: " & name, n)
+    if sym == nil or sym.kind notin {skProc, skExtProc}: error("Unknown proc: " & name, n)
     if sym.isForeign:
       error("Cannot call foreign proc '" & name & "' (must be linked)", n)
+    # Handle external proc calls (Windows uses indirect call through IAT)
+    if sym.kind == skExtProc:
+      inc n
+      # Skip argument handling - external procs use Windows calling convention
+      while n.kind == ParLe:
+        skip n
+      # Record the position of this CALL instruction for later patching
+      let callPos = ctx.buf.data.len
+      for i in 0..<ctx.extProcs.len:
+        if ctx.extProcs[i].name == name:
+          ctx.extProcs[i].callSites.add callPos
+          break
+      # Emit placeholder indirect call (will be patched to call [IAT_entry])
+      # For now emit a near call with placeholder
+      ctx.buf.data.add 0xE8'u8  # CALL rel32
+      ctx.buf.data.add 0x00'u8
+      ctx.buf.data.add 0x00'u8
+      ctx.buf.data.add 0x00'u8
+      ctx.buf.data.add 0x00'u8
+      if n.kind != ParRi: error("Expected ) after call", n)
+      inc n
+      return
     inc n
 
     # Parse arguments
@@ -3456,6 +3484,9 @@ proc writeMachO(a: var GenContext; outfile: string) =
       (CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL)
     of Arch.A64:
       (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64_ALL)
+    of Arch.WinX64, Arch.WinA64:
+      # Should not be called for Windows, but need to cover all cases
+      (CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL)
 
   # Build dynlink info for external procs
   var dynlink: macho.DynLinkInfo
@@ -3474,6 +3505,32 @@ proc writeMachO(a: var GenContext; outfile: string) =
     let codesignResult = execCmd("codesign -s - " & quoteShell(outfile))
     if codesignResult != 0:
       raise newException(OSError, "codesign failed with exit code " & $codesignResult)
+
+proc writeExe(a: var GenContext; outfile: string) =
+  x86.finalize(a.buf)
+  x86.finalize(a.bssBuf)
+  let code = a.buf.data
+
+  # Determine machine type based on architecture
+  let machine = case a.arch
+    of Arch.WinX64:
+      exe.IMAGE_FILE_MACHINE_AMD64
+    of Arch.WinA64:
+      exe.IMAGE_FILE_MACHINE_ARM64
+    else:
+      exe.IMAGE_FILE_MACHINE_AMD64
+
+  # Build dynlink info for external procs
+  var dynlink: exe.DynLinkInfo
+  for lib in a.imports:
+    dynlink.libs.add exe.ImportedLibInfo(name: lib.name, ordinal: lib.ordinal)
+  for ext in a.extProcs:
+    dynlink.extProcs.add exe.ExternalProcInfo(
+      name: ext.name, extName: ext.extName,
+      libOrdinal: ext.libOrdinal, gotSlot: ext.gotSlot,
+      callSites: ext.callSites)
+
+  exe.writePE(code, a.bssOffset, 0'u32, machine, outfile, dynlink)
 
 proc createLiterals(data: openArray[(string, int)]): Literals =
   result = default(Literals)
@@ -3518,6 +3575,8 @@ proc assemble*(filename, outfile: string) =
     writeElf(ctx, outfile)
   of Arch.A64:
     writeMachO(ctx, outfile)
+  of Arch.WinX64, Arch.WinA64:
+    writeExe(ctx, outfile)
 
   # Close all module streams
   for module in ctx.modules.mvalues:
