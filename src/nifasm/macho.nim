@@ -136,9 +136,15 @@ proc writeMachO*(code: Bytes; bssSize: int; entryAddr: uint64;
   let codeSize = code.len.uint64
   let codeAlignedSize = (codeSize + pageSize - 1) and not (pageSize - 1)
 
+  # Calculate load command sizes first (needed to determine code offset)
+  let textSegSize = sizeof(MachO_Segment64) + sizeof(MachO_Section64)
+  let dataSegSize = if bssSize > 0: sizeof(MachO_Segment64) + sizeof(MachO_Section64) else: 0
+  let entrySize = sizeof(MachO_EntryPoint)
+  let totalCmdsSize = textSegSize + dataSegSize + entrySize
+
   # TEXT segment: code
   let textVmaddr = baseAddr
-  let textFileoff = headerSize.uint64
+  let textFileoff = headerSize.uint64 + totalCmdsSize.uint64  # After header + load commands
   let textFileSize = codeAlignedSize
 
   # DATA segment: bss (zero-initialized)
@@ -166,15 +172,9 @@ proc writeMachO*(code: Bytes; bssSize: int; entryAddr: uint64;
     dataSection = initSection64("__bss", "__DATA", dataVmaddr, dataSize.uint64,
                                 0, 4, 0)
 
-  # Entry point command
-  let entryOff = entryAddr - textVmaddr
+  # Entry point command - offset from start of __TEXT segment
+  let entryOff = 0'u64  # Entry point is at the start of __text section
   var entryPoint = initEntryPoint(entryOff)
-
-  # Calculate load command sizes
-  let textSegSize = sizeof(MachO_Segment64) + sizeof(MachO_Section64)
-  let dataSegSize = if hasData: sizeof(MachO_Segment64) + sizeof(MachO_Section64) else: 0
-  let entrySize = sizeof(MachO_EntryPoint)
-  let totalCmdsSize = textSegSize + dataSegSize + entrySize
 
   # Create header
   var header = initMachOHeader(cputype, cpusubtype,
