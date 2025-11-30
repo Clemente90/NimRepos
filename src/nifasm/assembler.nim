@@ -15,6 +15,7 @@ proc infoStr(n: Cursor): string =
     result = "???"
 
 proc error(msg: string; n: Cursor) =
+  writeStackTrace()
   quit "[Error] " & msg & " at " & infoStr(n)
 
 proc typeError(want, got: Type; n: Cursor) =
@@ -1165,6 +1166,28 @@ proc genInstA64(n: var Cursor; ctx: var GenContext) =
     inc n
     return
 
+  if n.kind == ParLe and n.tag == LabTagId:
+    inc n
+    if n.kind != SymbolDef: error("Expected label name", n)
+    let name = getSym(n)
+    let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
+    if sym == nil:
+      let labId = ctx.buf.createLabel()
+      ctx.scope.define(Symbol(name: name, kind: skLabel, offset: int(labId)))
+      ctx.buf.defineLabel(labId)
+    elif sym.kind == skLabel:
+      if sym.offset == -1:
+        let labId = ctx.buf.createLabel()
+        sym.offset = int(labId)
+        ctx.buf.defineLabel(labId)
+      else:
+        ctx.buf.defineLabel(x86.LabelId(sym.offset))
+    else:
+      error("Symbol is not a label", n)
+    inc n
+    skipParRi n
+    return
+
   inc n
 
   case instTag
@@ -1433,35 +1456,7 @@ proc genInstA64(n: var Cursor; ctx: var GenContext) =
   of NoA64Inst:
     error("Invalid ARM64 instruction", n)
 
-  if n.tag == LabTagId:
-    inc n
-    if n.kind != SymbolDef: error("Expected label name", n)
-    let name = getSym(n)
-    let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
-    if sym == nil:
-      let labId = ctx.buf.createLabel()
-      ctx.scope.define(Symbol(name: name, kind: skLabel, offset: int(labId)))
-      ctx.buf.defineLabel(labId)
-    elif sym.kind == skLabel:
-      if sym.offset == -1:
-        let labId = ctx.buf.createLabel()
-        sym.offset = int(labId)
-        ctx.buf.defineLabel(labId)
-      else:
-        ctx.buf.defineLabel(x86.LabelId(sym.offset))
-    else:
-      error("Symbol is not a label", n)
-    inc n
-    if n.kind != ParRi: error("Expected )", n)
-    inc n
-    return
-
-  else:
-    error("Unknown instruction: " & $instTag, n)
-
-  if n.kind != ParRi: error("Expected ) at end of instruction", n)
-  inc n
-
+  skipParRi n
 
 proc genInst(n: var Cursor; ctx: var GenContext) =
   case ctx.arch
