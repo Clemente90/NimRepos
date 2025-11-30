@@ -133,6 +133,7 @@
 | `(nop)`                | X64Inst, A64Inst         | no operation |
 | `(syscall)`            | X64Inst                  | system call |
 | `(svc N)`              | A64Inst                  | supervisor call (system call) |
+| `(adr D L)`            | A64Inst                  | load address of label |
 | `(ldr D S)`            | A64Inst                  | load register |
 | `(str D S)`            | A64Inst                  | store register |
 | `(stp D1 D2 S)`        | A64Inst                  | store pair |

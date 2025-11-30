@@ -508,8 +508,8 @@ proc pass1Proc(n: var Cursor; scope: Scope; ctx: var GenContext) =
 
   # Parse result
   if n.kind == ParLe and n.tag == ResultTagId:
-     var r = parseResult(n, scope, ctx)
-     sig.result = r
+    var r = parseResult(n, scope, ctx)
+    sig.result = r
 
   # Parse clobber
   if n.kind == ParLe and n.tag == ClobberTagId:
@@ -568,7 +568,9 @@ proc pass1(n: var Cursor; scope: Scope; ctx: var GenContext) =
           inc n
           if n.kind != SymbolDef: error("Expected rodata name", n)
           let name = getSym(n)
-          scope.define(Symbol(name: name, kind: skRodata))
+          var sym = Symbol(name: name, kind: skRodata)
+          sym.offset = -1  # Mark as forward reference until defined
+          scope.define(sym)
           n = start
           skip n
         of GvarTagId:
@@ -901,15 +903,27 @@ proc parseOperandA64(n: var Cursor; ctx: var GenContext; expectedType: Type = ni
       result.typ = Type(kind: UIntT, bits: 64)
       inc n
     elif sym != nil and sym.kind == skRodata:
+      if sym.offset == -1:
+        # Forward reference - create label now
+        let labId = ctx.buf.createLabel()
+        sym.offset = int(labId)
+        result.label = labId
+      else:
+        result.label = LabelId(sym.offset)
       result.reg = arm64.X0
-      result.label = LabelId(sym.offset)
       result.typ = Type(kind: UIntT, bits: 64)
       inc n
     elif sym != nil and sym.kind == skGvar:
       if sym.isForeign:
         error("Cannot access foreign global variable '" & name & "' directly (must be linked)", n)
+      if sym.offset == -1:
+        # Forward reference - create label now
+        let labId = ctx.buf.createLabel()
+        sym.offset = int(labId)
+        result.label = labId
+      else:
+        result.label = LabelId(sym.offset)
       result.reg = arm64.X0
-      result.label = LabelId(sym.offset)
       result.typ = Type(kind: UIntT, bits: 64)
       inc n
     elif sym != nil and sym.kind == skTvar:
@@ -1220,6 +1234,16 @@ proc genInstA64(n: var Cursor; ctx: var GenContext) =
       else:
         arm64.emitMov(ctx.buf.data, dest.reg, op.reg)
 
+  of AdrA64:
+    let dest = parseDestA64(n, ctx)
+    let op = parseOperandA64(n, ctx)
+    if dest.isMem: error("ADR destination must be register", n)
+    # Check if operand is a label: type should be UIntT and not immediate/memory
+    # Labels/rodata/gvars set typ to UIntT and are not immediate or memory operands
+    if op.typ.kind != UIntT or op.isImm or op.isMem:
+      error("ADR source must be a label", n)
+    arm64.emitAdr(ctx.buf, dest.reg, op.label)
+
   of AddA64:
     let dest = parseDestA64(n, ctx)
     let op = parseOperandA64(n, ctx)
@@ -1476,8 +1500,8 @@ proc pass2Proc(n: var Cursor; ctx: var GenContext) =
   # Find/Create label for proc
   let sym = oldScope.lookup(name)
   if sym.offset == -1:
-     let lab = ctx.buf.createLabel()
-     sym.offset = int(lab)
+    let lab = ctx.buf.createLabel()
+    sym.offset = int(lab)
   ctx.buf.defineLabel(LabelId(sym.offset))
 
   # Initialize stack context
@@ -2049,10 +2073,10 @@ proc genInstX64(n: var Cursor; ctx: var GenContext) =
 
     var labId: LabelId
     if sym.offset == -1:
-       labId = ctx.buf.createLabel()
-       sym.offset = int(labId)
+      labId = ctx.buf.createLabel()
+      sym.offset = int(labId)
     else:
-       labId = LabelId(sym.offset)
+      labId = LabelId(sym.offset)
 
     ctx.buf.emitCall(labId)
 
@@ -3206,9 +3230,14 @@ proc pass2(n: Cursor; ctx: var GenContext) =
           inc n
           let name = getSym(n)
           let sym = ctx.scope.lookup(name)
-          let labId = ctx.buf.createLabel()
-          sym.offset = int(labId)
-          ctx.buf.defineLabel(labId)
+          if sym.offset == -1:
+            # Forward reference - create label now
+            let labId = ctx.buf.createLabel()
+            sym.offset = int(labId)
+            ctx.buf.defineLabel(labId)
+          else:
+            # Reuse existing label (forward reference was already handled)
+            ctx.buf.defineLabel(LabelId(sym.offset))
           inc n
           let s = getStr(n)
           for c in s: ctx.buf.data.add byte(c)
