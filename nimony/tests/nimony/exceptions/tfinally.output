@@ -1,0 +1,9 @@
+hi
+caught
+A finally
+hi
+B finally
+Object initialized
+Destructor called for MyObj(value=123)
+Inside finally block
+Program end

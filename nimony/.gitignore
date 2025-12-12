@@ -1,0 +1,6 @@
+bin/
+nimcache/
+nimblecache/
+htmldocs/
+*.exe
+src/nifc/nifc_grammar.nim

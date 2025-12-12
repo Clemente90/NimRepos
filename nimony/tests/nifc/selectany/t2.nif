@@ -1,0 +1,10 @@
+(.nif24)
+(stmts
+  (incl "<stdio.h>")
+  (proc :genericProc.c . (void) (pragmas (selectany)) (stmts
+    (call printf.c "hello %s\0A" "file t2")
+  )
+  )
+
+
+)
