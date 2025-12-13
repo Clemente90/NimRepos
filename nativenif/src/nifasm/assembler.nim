@@ -398,7 +398,6 @@ proc parseType(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
     else:
       error("Unknown type tag: " & $t, n)
     skipParRi n, "type"
-    inc n
   else:
     error("Expected type", n)
 
@@ -476,27 +475,25 @@ proc parseResult(n: var Cursor; scope: Scope; ctx: var GenContext): seq[Param] =
   # (result (ret :name (reg) Type) ...)
   if n.kind == ParLe and tagToNifasmDecl(n.tag) == ResultD:
     inc n
-    # if it's a block of results or a single declaration?
-    # "result value declaration".
-    # Usually return values are just (ret :name (loc) Type)
-    # Let's try parsing one.
-    if n.kind != SymbolDef: error("Expected result name", n)
-    let name = getSym(n)
-    inc n
-    var reg = InvalidTagId
-    if n.kind == ParLe:
-      let locTag = n.tag
-      if rawTagIsX64Reg(locTag):
-        reg = locTag
-        inc n
-        skipParRi n, "result location"
+    while n.kind != ParRi:
+      if n.kind != SymbolDef: error("Expected result name", n)
+      let name = getSym(n)
+      inc n
+      var reg = InvalidTagId
+      if n.kind == ParLe:
+        let locTag = n.tag
+        if rawTagIsX64Reg(locTag):
+          reg = locTag
+          inc n
+          skipParRi n, "result location"
+        else:
+          error "result must be a register", n
       else:
-        error "result must be a register", n
-    else:
-      error("Expected location", n)
-    let typ = parseType(n, scope, ctx)
-    result.add Param(name: name, typ: typ, reg: reg)
-    skipParRi n, "result declaration"
+        error("Expected location", n)
+      let typ = parseType(n, scope, ctx)
+      result.add Param(name: name, typ: typ, reg: reg)
+      skipParRi n, "result declaration"
+    inc n
 
 proc parseClobbers(n: var Cursor): set[x86.Register] =
   # (clobber (rax) (rbx) ...)
