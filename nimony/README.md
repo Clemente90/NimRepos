@@ -29,6 +29,12 @@ Nimony uses a tool called `hastur` to build:
 nim c -r src/hastur build all
 ```
 
+The command above must be executed from the `nimony` directory with the
+system Nim 2.2.6 compiler on your `PATH`. It produces the suite of helper
+executables under `bin/` (including the `nimony` compiler itself) and can be
+rerun whenever you pull new changes. The generated binaries are intentionally
+left out of version control; rebuild them locally as needed.
+
 
 ## Hello World
 
@@ -40,3 +46,13 @@ import std / syncio
 
 echo "hi"
 ```
+
+To compile and run it with the freshly built `nimony` compiler, write the
+snippet to a file (for example `hello.nim`) and invoke:
+
+```
+./bin/nimony c -r hello.nim
+```
+
+The `-r` flag runs the produced binary after compilation, making it easy to
+confirm the toolchain works end-to-end.

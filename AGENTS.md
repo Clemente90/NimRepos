@@ -9,3 +9,9 @@ commits to each sub repo isolated from each other!
 You have a Nim compiler version v2.2.6 available. Use it as a baseline for
 expected behavior for the Nim verion 3 compiler under development.
 
+For the `nimony` subtree, build tools with the installed Nim 2.2.6 compiler
+from inside the `nimony` directory using `nim c -r src/hastur build all`.
+This produces the `bin/nimony` compiler along with its helper tools. Do not
+commit any compiled outputs (such as the `src/hastur` executable); rebuild
+them locally when needed.
+
