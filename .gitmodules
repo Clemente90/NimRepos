@@ -1,0 +1,6 @@
+[submodule "nimony/vendor/mimalloc"]
+	path = nimony/vendor/mimalloc
+	url = https://github.com/nim-lang/mimalloc
+[submodule "nimony/vendor/errorcodes"]
+	path = nimony/vendor/errorcodes
+	url = https://github.com/nim-lang/errorcodes
