@@ -33,6 +33,10 @@ elif defined(windows):
 else:
   exec "nim c -r src/nifasm/nifasm tests/hello.nif"
   exec "tests/hello"
+  exec "nim c -r src/nifasm/nifasm tests/thread_local_tls.nif"
+  exec "nim c -r src/nifasm/nifasm tests/thread_local_switch.nif"
+  exec "nim c -r src/nifasm/nifasm tests/atomic_ops.nif"
+  exec "tests/atomic_ops"
   exec "nim c -r src/nifasm/nifasm tests/unique_bind.nif"
   exec "nim c -r src/nifasm/nifasm tests/kill_reuse.nif"
   exec "nim c -r src/nifasm/nifasm tests/kill_reuse_multi.nif"
