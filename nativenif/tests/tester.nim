@@ -1,6 +1,5 @@
 import std/[os, osproc, strutils]
 
-
 proc exec(cmd: string; showProgress = false) =
   if showProgress:
     let exitCode = execShellCmd(cmd)
@@ -18,7 +17,6 @@ proc execExpectFailure(cmd: string; expectedSubstr = "") =
   if expectedSubstr.len > 0 and not s.contains(expectedSubstr):
     quit "UNEXPECTED OUTPUT " & cmd & "\nExpected to contain: " & expectedSubstr & "\nGot:\n" & s
 
-
 when defined(macosx):
   exec "nim c -r src/nifasm/nifasm tests/hello_darwin.nif && tests/hello_darwin"
 elif defined(windows):
@@ -26,6 +24,9 @@ elif defined(windows):
   exec "./tests/hello_win64.exe"
 else:
   exec "nim c -r src/nifasm/nifasm tests/hello.nif && tests/hello"
+  exec "nim c -r src/nifasm/nifasm tests/thread_local_tls.nif"
+  exec "nim c -r src/nifasm/nifasm tests/thread_local_switch.nif"
+  exec "nim c -r src/nifasm/nifasm tests/atomic_ops.nif && tests/atomic_ops"
   exec "nim c -r src/nifasm/nifasm tests/unique_bind.nif"
   execExpectFailure("nim c -r src/nifasm/nifasm tests/double_bind.nif", "Register RAX is already bound to variable 'x.0'")
   execExpectFailure("nim c -r src/nifasm/nifasm tests/triple_bind.nif", "Register RAX is already bound to variable 'x.0'")
