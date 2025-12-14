@@ -16,7 +16,9 @@ proc infoStr(n: Cursor): string =
 
 proc error(msg: string; n: Cursor) =
   writeStackTrace()
-  quit "[Error] " & msg & " at " & infoStr(n)
+  let tagStr = if n.kind == ParLe: $tag(n) else: "-"
+  quit "[Error] " & msg & " at " & infoStr(n) &
+    " (kind=" & $n.kind & ", tag=" & tagStr & ")"
 
 proc skipParRi(n: var Cursor) {.inline.} =
   if n.kind != ParRi: error("Expected )", n)
@@ -36,8 +38,11 @@ proc getInt(n: Cursor): int64 =
     error("Expected integer literal", n)
 
 proc getSym(n: Cursor): string =
-  if n.kind in {Symbol, SymbolDef}:
+  case n.kind
+  of Symbol, SymbolDef:
     result = pool.syms[n.symId]
+  of Ident:
+    result = pool.strings[n.litId]
   else:
     error("Expected symbol", n)
 
@@ -362,7 +367,7 @@ proc lookupWithAutoImport(ctx: var GenContext; scope: Scope; name: string; n: Cu
       result = scope.lookup(basename)
 
 proc parseType(n: var Cursor; scope: Scope; ctx: var GenContext): Type =
-  if n.kind == Symbol:
+  if n.kind in {Symbol, SymbolDef, Ident}:
     let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, scope, name, n)
     if sym == nil or sym.kind != skType:
@@ -928,7 +933,7 @@ proc parseOperandA64(n: var Cursor; ctx: var GenContext; expectedType: Type = ni
       result.typ = expectedType
     else:
       result.typ = Type(kind: IntT, bits: 64)
-  elif n.kind == Symbol:
+  elif n.kind in {Symbol, Ident}:
     let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
     if sym != nil and (sym.kind == skVar or sym.kind == skParam):
@@ -988,7 +993,12 @@ proc parseDestA64(n: var Cursor; ctx: var GenContext): OperandA64 =
   if n.kind == ParLe and rawTagIsA64Reg(n.tag):
     result.reg = parseRegisterA64(n)
     result.typ = Type(kind: IntT, bits: 64)
-  elif n.kind == Symbol:
+  elif n.kind == ParLe and (n.tag == MemTagId or n.tag == DotTagId or n.tag == AtTagId):
+    let op = parseOperandA64(n, ctx)
+    if not op.isMem:
+      error("Expected memory destination", n)
+    result = op
+  elif n.kind in {Symbol, Ident}:
     let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
     if sym != nil and sym.kind == skVar:
@@ -1594,6 +1604,28 @@ proc genInst(n: var Cursor; ctx: var GenContext) =
   of Arch.A64, Arch.WinA64:
     genInstA64(n, ctx)
 
+proc collectLabels(n: var Cursor; ctx: var GenContext; scope: Scope) =
+  ## Pre-scan a cursor subtree and create placeholder symbols for labels.
+  if n.kind == ParLe:
+    if n.tag == LabTagId:
+      var tmp = n
+      inc tmp
+      if tmp.kind in {SymbolDef, Symbol, Ident}:
+        let name = getSym(tmp)
+        var sym = scope.lookup(name)
+        if sym == nil:
+          let labId = ctx.buf.createLabel()
+          sym = Symbol(name: name, kind: skLabel, offset: int(labId))
+          scope.define(sym)
+        elif sym.kind == skLabel and sym.offset == -1:
+          sym.offset = int(ctx.buf.createLabel())
+    inc n
+    while n.kind != ParRi:
+      collectLabels(n, ctx, scope)
+    inc n
+  else:
+    inc n
+
 proc pass2Proc(n: var Cursor; ctx: var GenContext) =
   let oldScope = ctx.scope
   ctx.scope = newScope(oldScope)
@@ -1631,6 +1663,14 @@ proc pass2Proc(n: var Cursor; ctx: var GenContext) =
   inc n
   while n.kind == ParLe and n.tag != StmtsTagId:
     skip n
+  var scan = n
+  if scan.kind == ParLe and scan.tag == StmtsTagId:
+    collectLabels(scan, ctx, ctx.scope)
+  if ctx.arch in {Arch.X64, Arch.WinX64}:
+    x86.emitPush(ctx.buf.data, RBP)
+    x86.emitMov(ctx.buf.data, RBP, RSP)
+    x86.emitSubImm(ctx.buf.data, RSP, 0)
+    ctx.ssizePatches.add(ctx.buf.data.len - 4)
   if n.kind == ParLe and n.tag == StmtsTagId:
     inc n
     while n.kind != ParRi:
@@ -1692,18 +1732,34 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
       var objType: Type
       var baseReg: x86.Register
       var baseDisp: int32 = 0
+      var baseIndex: x86.Register
+      var baseScale = 1
+      var baseHasIndex = false
+      var useFsSegment = false
 
       if baseOp.typ.kind == TypeKind.PtrT:
         # Base is a pointer to an object or union
         objType = baseOp.typ.base
         if objType.kind notin {TypeKind.ObjectT, TypeKind.UnionT}:
           error("Cannot access field of non-object/union type " & $objType, n)
-        baseReg = baseOp.reg
+        if baseOp.isMem:
+          baseReg = baseOp.mem.base
+          baseDisp = baseOp.mem.displacement
+          baseHasIndex = baseOp.mem.hasIndex
+          baseIndex = baseOp.mem.index
+          baseScale = baseOp.mem.scale
+          useFsSegment = baseOp.mem.useFsSegment
+        else:
+          baseReg = baseOp.reg
       elif baseOp.isMem and baseOp.typ.kind in {TypeKind.ObjectT, TypeKind.UnionT}:
         # Base is a stack-allocated object or union
         objType = baseOp.typ
         baseReg = baseOp.mem.base
         baseDisp = baseOp.mem.displacement
+        baseHasIndex = baseOp.mem.hasIndex
+        baseIndex = baseOp.mem.index
+        baseScale = baseOp.mem.scale
+        useFsSegment = baseOp.mem.useFsSegment
       else:
         error("dot requires pointer to object/union or stack object/union, got " & $baseOp.typ, n)
 
@@ -1731,8 +1787,11 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
       result.isMem = true
       result.mem = x86.MemoryOperand(
         base: baseReg,
+        index: baseIndex,
+        scale: baseScale,
         displacement: baseDisp + int32(fieldOffset),
-        hasIndex: false
+        hasIndex: baseHasIndex,
+        useFsSegment: useFsSegment
       )
       result.typ = Type(kind: TypeKind.PtrT, base: fieldType)
 
@@ -1901,7 +1960,6 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
         result.typ = Type(kind: IntT, bits: 64)  # Default assumption
 
       skipParRi n, "mem expression"
-      inc n
     elif t == SsizeTagId:
       result.isSsize = true
       result.typ = Type(kind: IntT, bits: 64)
@@ -1920,7 +1978,7 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
         result.typ = expectedType
     else:
         result.typ = Type(kind: IntT, bits: 64) # Default
-  elif n.kind == Symbol:
+  elif n.kind in {Symbol, Ident}:
     let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
     if sym != nil and (sym.kind == skVar or sym.kind == skParam):
@@ -2014,7 +2072,12 @@ proc parseDest(n: var Cursor; ctx: var GenContext): Operand =
     if result.reg in ctx.regBindings:
       error("Register " & $result.reg & " is bound to variable '" &
             ctx.regBindings[result.reg] & "', use the variable name instead", n)
-  elif n.kind == Symbol:
+  elif n.kind == ParLe and (n.tag == MemTagId or n.tag == DotTagId or n.tag == AtTagId):
+    let op = parseOperand(n, ctx)
+    if not op.isMem:
+      error("Expected memory destination", n)
+    result = op
+  elif n.kind in {Symbol, Ident}:
     let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
     if sym != nil and sym.kind == skVar:
@@ -3539,6 +3602,10 @@ proc pass2(n: Cursor; ctx: var GenContext) =
         let start = n
         let declTag = tagToNifasmDecl(n.tag)
         case declTag
+        of TypeD:
+          # Types were fully handled in pass1; skip the definition body.
+          n = start
+          skip n
         of ProcD:
           # Skip foreign procs - they're not code-generated
           inc n
