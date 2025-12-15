@@ -476,6 +476,9 @@ proc parseResult(n: var Cursor; scope: Scope; ctx: var GenContext): seq[Param] =
   if n.kind == ParLe and tagToNifasmDecl(n.tag) == ResultD:
     inc n
     while n.kind != ParRi:
+      if n.kind != ParLe:
+        error("Expected result declaration", n)
+      inc n
       if n.kind != SymbolDef: error("Expected result name", n)
       let name = getSym(n)
       inc n
@@ -984,10 +987,13 @@ proc parseOperandA64(n: var Cursor; ctx: var GenContext; expectedType: Type = ni
   else:
     error("Unexpected operand kind", n)
 
-proc parseDestA64(n: var Cursor; ctx: var GenContext): OperandA64 =
+proc parseDestA64(n: var Cursor; ctx: var GenContext; expectedType: Type = nil): OperandA64 =
   if n.kind == ParLe and rawTagIsA64Reg(n.tag):
     result.reg = parseRegisterA64(n)
-    result.typ = Type(kind: IntT, bits: 64)
+    if expectedType != nil:
+      result.typ = expectedType
+    else:
+      result.typ = Type(kind: IntT, bits: 64)
   elif n.kind == Symbol:
     let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
@@ -1014,6 +1020,9 @@ proc parseDestA64(n: var Cursor; ctx: var GenContext): OperandA64 =
   else:
     error("Expected destination", n)
 
+  if expectedType != nil and result.typ != nil:
+    checkType(expectedType, result.typ, n)
+
 proc genCallA64(n: var Cursor; ctx: var GenContext) =
   if ctx.inCall: error("Nested calls are not allowed", n)
   ctx.inCall = true
@@ -1026,6 +1035,7 @@ proc genCallA64(n: var Cursor; ctx: var GenContext) =
   if sym == nil or sym.kind notin {skProc, skExtProc}: error("Unknown proc: " & name, n)
   if sym.isForeign:
     error("Cannot call foreign proc '" & name & "' (must be linked)", n)
+  let sig = sym.sig
   # Handle external proc calls differently
   if sym.kind == skExtProc:
     inc n
@@ -1045,18 +1055,43 @@ proc genCallA64(n: var Cursor; ctx: var GenContext) =
     return
   inc n
   var args: Table[string, OperandA64]
+  var resultBindings: Table[string, OperandA64]
   while n.kind == ParLe:
     if n.tag == MovTagId:
       inc n
-      if n.kind != Symbol: error("Expected argument name", n)
-      let argName = getSym(n)
+      if n.kind != Symbol: error("Expected argument or result name", n)
+      let entryName = getSym(n)
       inc n
-      let val = parseOperandA64(n, ctx)
-      args[argName] = val
+
+      var handled = false
+      for param in sig.params:
+        if param.name == entryName:
+          if entryName in args:
+            error("Duplicate argument: " & entryName, n)
+          let val = parseOperandA64(n, ctx)
+          args[entryName] = val
+          handled = true
+          break
+      if not handled:
+        for res in sig.result:
+          if res.name == entryName:
+            if entryName in resultBindings:
+              error("Duplicate result binding: " & entryName, n)
+            let dest = parseDestA64(n, ctx, res.typ)
+            if dest.isMem:
+              error("Result '" & entryName & "' must be bound to a register", n)
+            let expectedReg = tagToRegisterA64(res.reg)
+            if dest.reg != expectedReg:
+              error("Result '" & entryName & "' must bind register " & $expectedReg, n)
+            resultBindings[entryName] = dest
+            handled = true
+            break
+      if not handled:
+        error("Unknown call operand: " & entryName, n)
+
       skipParRi n, "argument"
     else:
       error("Expected (mov arg val) in call", n)
-  let sig = sym.sig
   for param in sig.params:
     if param.name notin args:
       error("Missing argument: " & param.name, n)
@@ -1089,6 +1124,9 @@ proc genCallA64(n: var Cursor; ctx: var GenContext) =
         arm64.emitLdr(ctx.buf.data, paramReg, arg.mem.base, arg.mem.offset)
       elif arg.reg != paramReg:
         arm64.emitMov(ctx.buf.data, paramReg, arg.reg)
+  for res in sig.result:
+    if res.name notin resultBindings:
+      error("Missing result binding: " & res.name, n)
   var labId: LabelId
   if sym.offset == -1:
     labId = ctx.buf.createLabel()
@@ -2006,10 +2044,13 @@ proc parseOperand(n: var Cursor; ctx: var GenContext; expectedType: Type = nil):
   else:
     error("Unexpected operand kind", n)
 
-proc parseDest(n: var Cursor; ctx: var GenContext): Operand =
+proc parseDest(n: var Cursor; ctx: var GenContext; expectedType: Type = nil): Operand =
   if n.kind == ParLe and rawTagIsX64Reg(n.tag):
     result.reg = parseRegister(n)
-    result.typ = Type(kind: IntT, bits: 64)
+    if expectedType != nil:
+      result.typ = expectedType
+    else:
+      result.typ = Type(kind: IntT, bits: 64)
     # Check if this register is bound to a variable
     if result.reg in ctx.regBindings:
       error("Register " & $result.reg & " is bound to variable '" &
@@ -2018,50 +2059,53 @@ proc parseDest(n: var Cursor; ctx: var GenContext): Operand =
     let name = getSym(n)
     let sym = lookupWithAutoImport(ctx, ctx.scope, name, n)
     if sym != nil and sym.kind == skVar:
-       if sym.onStack:
-         result.isMem = true
-         result.mem = x86.MemoryOperand(base: RBP, displacement: int32(sym.offset))
-         result.typ = sym.typ
-       elif sym.reg != InvalidTagId:
-         result.reg = case sym.reg
-            of RaxTagId, R0TagId: RAX
-            of RcxTagId, R2TagId: RCX
-            of RdxTagId, R3TagId: RDX
-            of RbxTagId, R1TagId: RBX
-            of RspTagId, R7TagId: RSP
-            of RbpTagId, R6TagId: RBP
-            of RsiTagId, R4TagId: RSI
-            of RdiTagId, R5TagId: RDI
-            of R8TagId: R8
-            of R9TagId: R9
-            of R10TagId: R10
-            of R11TagId: R11
-            of R12TagId: R12
-            of R13TagId: R13
-            of R14TagId: R14
-            of R15TagId: R15
-            else: RAX
-         result.typ = sym.typ
-         # Writing to a register makes it valid (unclobbered)
-         ctx.clobbered.excl(result.reg)
-       else:
-         error("Variable has no location", n)
-       inc n
+      if sym.onStack:
+        result.isMem = true
+        result.mem = x86.MemoryOperand(base: RBP, displacement: int32(sym.offset))
+        result.typ = sym.typ
+      elif sym.reg != InvalidTagId:
+        result.reg = case sym.reg
+          of RaxTagId, R0TagId: RAX
+          of RcxTagId, R2TagId: RCX
+          of RdxTagId, R3TagId: RDX
+          of RbxTagId, R1TagId: RBX
+          of RspTagId, R7TagId: RSP
+          of RbpTagId, R6TagId: RBP
+          of RsiTagId, R4TagId: RSI
+          of RdiTagId, R5TagId: RDI
+          of R8TagId: R8
+          of R9TagId: R9
+          of R10TagId: R10
+          of R11TagId: R11
+          of R12TagId: R12
+          of R13TagId: R13
+          of R14TagId: R14
+          of R15TagId: R15
+          else: RAX
+        result.typ = sym.typ
+        # Writing to a register makes it valid (unclobbered)
+        ctx.clobbered.excl(result.reg)
+      else:
+        error("Variable has no location", n)
+      inc n
     elif sym != nil and sym.kind == skTvar:
-       # Writing to thread local variable via FS segment
-       result.isMem = true
-       result.mem = x86.MemoryOperand(
-         base: RBP,  # RBP allows displacement-only addressing
-         displacement: int32(sym.offset),
-         hasIndex: false,
-         useFsSegment: true  # Use FS segment register
-       )
-       result.typ = sym.typ
-       inc n
+      # Writing to thread local variable via FS segment
+      result.isMem = true
+      result.mem = x86.MemoryOperand(
+        base: RBP,  # RBP allows displacement-only addressing
+        displacement: int32(sym.offset),
+        hasIndex: false,
+        useFsSegment: true  # Use FS segment register
+      )
+      result.typ = sym.typ
+      inc n
     else:
-       error("Expected variable or register as destination", n)
+      error("Expected variable or register as destination", n)
   else:
     error("Expected destination", n)
+
+  if expectedType != nil and result.typ != nil:
+    checkType(expectedType, result.typ, n)
 
 proc checkType(want, got: Type; n: Cursor) =
   if not compatible(want, got):
@@ -2101,24 +2145,50 @@ proc genCallX64(n: var Cursor; ctx: var GenContext) =
   if sym == nil or sym.kind != skProc: error("Unknown proc: " & name & " (use 'iat' for external procs)", n)
   if sym.isForeign:
     error("Cannot call foreign proc '" & name & "' (must be linked)", n)
+  let sig = sym.sig
   inc n
 
   # Parse arguments
   var args: Table[string, Operand]
+  var resultBindings: Table[string, Operand]
   while n.kind == ParLe:
     if tagToX64Inst(n.tag) == MovX64:
       inc n # mov
-      if n.kind != Symbol: error("Expected argument name", n)
-      let argName = getSym(n)
+      if n.kind != Symbol: error("Expected argument or result name", n)
+      let entryName = getSym(n)
       inc n
-      let val = parseOperand(n, ctx)
-      args[argName] = val
+
+      var handled = false
+      for param in sig.params:
+        if param.name == entryName:
+          if entryName in args:
+            error("Duplicate argument: " & entryName, n)
+          let val = parseOperand(n, ctx)
+          args[entryName] = val
+          handled = true
+          break
+      if not handled:
+        for res in sig.result:
+          if res.name == entryName:
+            if entryName in resultBindings:
+              error("Duplicate result binding: " & entryName, n)
+            let dest = parseDest(n, ctx, res.typ)
+            if dest.isMem:
+              error("Result '" & entryName & "' must be bound to a register", n)
+            let expectedReg = tagToRegister(res.reg)
+            if dest.reg != expectedReg:
+              error("Result '" & entryName & "' must bind register " & $expectedReg, n)
+            resultBindings[entryName] = dest
+            handled = true
+            break
+      if not handled:
+        error("Unknown call operand: " & entryName, n)
+
       skipParRi n, "argument"
     else:
       error("Expected (mov arg val) in call", n)
 
   # Validate arguments against signature
-  let sig = sym.sig
   for param in sig.params:
     if param.name notin args:
       error("Missing argument: " & param.name, n)
@@ -2176,8 +2246,14 @@ proc genCallX64(n: var Cursor; ctx: var GenContext) =
       elif arg.reg != paramReg:
         x86.emitMov(ctx.buf.data, paramReg, arg.reg)
 
+  for res in sig.result:
+    if res.name notin resultBindings:
+      error("Missing result binding: " & res.name, n)
+
   # Clobber registers
   ctx.clobbered.incl(sig.clobbers)
+  for res in sig.result:
+    ctx.clobbered.excl(tagToRegister(res.reg))
 
   var labId: LabelId
   if sym.offset == -1:

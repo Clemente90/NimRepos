@@ -116,6 +116,15 @@ For example:
 
 Within a `call` the named arguments are put into the scope and have to be used to make parameter passing explicit and checkable! It is checked that every argument is assigned a value and only once.
 
+Return values are declared in a proc's `(result ...)` section. Every return slot must also be bound explicitly at the call site using another `mov` inside the `call` block. The name on the `mov` is the return slot name and the value is the destination location for the returned register. All results must be bound and the destination must reside in the register specified by the callee's signature (stack locations are rejected). For example:
+
+```
+(call foo.0
+  (mov arg.0 +56)
+  (mov arg.1 +1)
+  (mov ret.0 resultVar)
+)
+```
 
 ## Local variables
 
