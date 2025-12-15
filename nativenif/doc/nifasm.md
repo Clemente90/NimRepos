@@ -116,6 +116,17 @@ For example:
 
 Within a `call` the named arguments are put into the scope and have to be used to make parameter passing explicit and checkable! It is checked that every argument is assigned a value and only once.
 
+Return values must also be bound explicitly so that type checking can confirm the call site consumes them correctly. Each declared result symbol is available as a source operand and must be moved into a register destination:
+
+```
+(call foo.0
+  (mov arg.0 +56)
+  (mov (rbx) ret.0)
+)
+```
+
+Result bindings must target registers (either explicit registers or variables stored in a register). Stack locations are rejected; complex return values must instead be passed by pointer parameters.
+
 
 ## Local variables
 
