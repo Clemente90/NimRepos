@@ -116,6 +116,33 @@ For example:
 
 Within a `call` the named arguments are put into the scope and have to be used to make parameter passing explicit and checkable! It is checked that every argument is assigned a value and only once.
 
+Return values are also part of the call-site contract. For every declared result the call must bind the returned value to the register location specified in the callee's signature using `mov` as well:
+
+```
+(proc :adder.0
+  (params (param :lhs (rdi) (i +64)) (param :rhs (rsi) (i +64)))
+  (ret :sum (rax) (i +64))
+  (clobber)
+  (body ...)
+)
+
+(proc :use_adder.0
+  (params)
+  (result)
+  (clobber (rax))
+  (stmts
+    (var :tmp.0 (rax) (i +64))
+    (call adder.0
+      (mov arg.0 +4)
+      (mov arg.1 +6)
+      (mov sum tmp.0)
+    )
+  )
+)
+```
+
+Each result binding must target the register defined in the callee signature; memory destinations are not permitted. More complex return types must be lowered to hidden pointer parameters instead of direct results.
+
 
 ## Local variables
 
@@ -466,7 +493,7 @@ These instructions move data if the condition is met. `dest` must be a register.
 - `(jnae <label>)` - Jump if not above or equal (unsigned)
 
 **Function calls and returns:**
-- `(call <target>)` - Call function (target can be label or register)
+- `(call <target> ...)` - Call function (target can be label or register); arguments and return registers are bound explicitly with `(mov <name> <location>)`
 - `(ret)` - Return from function
 
 ### Stack operations
