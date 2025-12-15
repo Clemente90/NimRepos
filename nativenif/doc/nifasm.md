@@ -114,6 +114,18 @@ For example:
 )
 ```
 
+Return values are bound explicitly as well. Each result name declared in the proc
+signature must appear exactly once inside the `call` and it must target a
+register-backed location (stack slots are rejected) so that return registers stay
+checkable and type-correct:
+
+```
+(call foo.0
+  (mov arg.0 +56)
+  (mov ret.0 myResult)
+)
+```
+
 Within a `call` the named arguments are put into the scope and have to be used to make parameter passing explicit and checkable! It is checked that every argument is assigned a value and only once.
 
 

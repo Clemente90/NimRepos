@@ -26,7 +26,10 @@ elif defined(windows):
   exec "./tests/hello_win64.exe"
 else:
   exec "nim c -r src/nifasm/nifasm tests/hello.nif && tests/hello"
+  exec "nim c -r src/nifasm/nifasm tests/call_result_binding.nif"
   exec "nim c -r src/nifasm/nifasm tests/unique_bind.nif"
   execExpectFailure("nim c -r src/nifasm/nifasm tests/double_bind.nif", "Register RAX is already bound to variable 'x.0'")
   execExpectFailure("nim c -r src/nifasm/nifasm tests/triple_bind.nif", "Register RAX is already bound to variable 'x.0'")
   execExpectFailure("nim c -r src/nifasm/nifasm tests/quadruple_bind.nif", "Register RAX is already bound to variable 'x.0'")
+  execExpectFailure("nim c -r src/nifasm/nifasm tests/missing_call_result.nif", "Missing result binding: ret.0")
+  execExpectFailure("nim c -r src/nifasm/nifasm tests/stack_result_binding.nif", "Result 'ret.0' must be bound to a register")
