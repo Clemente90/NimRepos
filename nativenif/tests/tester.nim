@@ -57,7 +57,11 @@ else:
   execExpectOutput("./tests/string_pointer_field", "Hello\n")
   exec "nim c -r src/nifasm/nifasm tests/message_inline_array.nif"
   execExpectOutput("./tests/message_inline_array", "Ping\n")
+  exec "nim c -r src/nifasm/nifasm tests/call_result_binding.nif"
   execExpectFailure("nim c -r src/nifasm/nifasm tests/double_bind.nif", "Register RAX is already bound to variable 'x.0'")
   execExpectFailure("nim c -r src/nifasm/nifasm tests/triple_bind.nif", "Register RAX is already bound to variable 'x.0'")
   execExpectFailure("nim c -r src/nifasm/nifasm tests/quadruple_bind.nif", "Register RAX is already bound to variable 'x.0'")
   execExpectFailure("nim c -r src/nifasm/nifasm tests/kill_use_after_kill.nif", "Expected variable or register as destination")
+  execExpectFailure("nim c -r src/nifasm/nifasm tests/missing_result_binding.nif", "Missing result binding: ret.0")
+  execExpectFailure("nim c -r src/nifasm/nifasm tests/stack_result_binding.nif", "Result 'ret.0' must be bound to a register")
+  execExpectFailure("nim c -r src/nifasm/nifasm tests/result_type_mismatch.nif", "Type mismatch:")
