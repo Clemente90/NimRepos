@@ -540,7 +540,7 @@ proc pass1Proc(n: var Cursor; scope: Scope; ctx: var GenContext) =
   if n.kind == ParLe and tagToNifasmDecl(n.tag) == ClobberD:
     sig.clobbers = parseClobbers(n)
 
-  let sym = Symbol(name: name, kind: skProc, sig: sig)
+  let sym = Symbol(name: name, kind: skProc, sig: sig, offset: -1)
   scope.define(sym)
 
 proc handleArch(n: var Cursor; ctx: var GenContext) =
@@ -3354,6 +3354,9 @@ proc genInstX64(n: var Cursor; ctx: var GenContext) =
     skipParRi n, "nop"
   of RetX64:
     inc n
+    if ctx.procName.len > 0:
+      x86.emitMov(ctx.buf.data, RSP, RBP)
+      x86.emitPop(ctx.buf.data, RBP)
     x86.emitRet(ctx.buf.data)
     skipParRi n, "ret"
   of LabX64:
